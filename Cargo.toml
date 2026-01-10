@@ -29,6 +29,17 @@ rand_core = "0.9"
 futures = { version = "0.3", default-features = false, features = ["async-await"] }
 heapless = "0.9"
 
+[patch.crates-io]
+embassy-executor = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-nrf = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy.git" }
+
 [[bin]]
 name = "voyager"
 test = false
