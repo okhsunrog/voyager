@@ -8,6 +8,9 @@ use panic_halt as _;
 #[cfg(feature = "defmt")]
 use {defmt_rtt as _, panic_probe as _};
 
+// Link in nrf-mpsl for critical-section implementation
+use nrf_mpsl as _;
+
 use embassy_executor::Spawner;
 use embassy_nrf::gpio::{Level, Output, OutputDrive};
 use embassy_nrf::twim::{self, Twim};
