@@ -60,6 +60,25 @@ fn reboot_to_bootloader() -> ! {
     cortex_m::peripheral::SCB::sys_reset()
 }
 
+// ============================================================================
+// Shared Endpoint Handlers
+// ============================================================================
+
+async fn handle_set_time(ts: u64) {
+    CURRENT_TIME.store(ts, Ordering::Relaxed);
+    info!("Time set to: {}", ts);
+}
+
+fn handle_get_time() -> u64 {
+    CURRENT_TIME.load(Ordering::Relaxed)
+}
+
+async fn handle_reboot_to_dfu() -> ! {
+    info!("Rebooting to bootloader...");
+    Timer::after_millis(100).await;
+    reboot_to_bootloader()
+}
+
 bind_interrupts!(struct Irqs {
     TWISPI0 => twim::InterruptHandler<peripherals::TWISPI0>;
     RNG => rng::InterruptHandler<RNG>;
@@ -141,7 +160,7 @@ async fn pingserver() {
 }
 
 #[embassy_executor::task]
-async fn time_server() {
+async fn usb_time_server() {
     // Set time endpoint
     let set_socket = USB_STACK
         .endpoints()
@@ -157,19 +176,14 @@ async fn time_server() {
     let mut get_hdl = get_socket.attach();
 
     loop {
-        let set_fut = set_hdl.serve(async |ts| {
-            CURRENT_TIME.store(*ts, Ordering::Relaxed);
-            info!("[usb] Time set to: {}", ts);
-        });
-
-        let get_fut = get_hdl.serve(async |_| CURRENT_TIME.load(Ordering::Relaxed));
-
+        let set_fut = set_hdl.serve(async |ts| handle_set_time(*ts).await);
+        let get_fut = get_hdl.serve(async |_| handle_get_time());
         select(set_fut, get_fut).await;
     }
 }
 
 #[embassy_executor::task]
-async fn dfu_server() {
+async fn usb_dfu_server() {
     let socket = USB_STACK
         .endpoints()
         .bounded_server::<RebootToDfuEndpoint, 4>(Some("dfu"));
@@ -177,13 +191,7 @@ async fn dfu_server() {
     let mut hdl = socket.attach();
 
     loop {
-        let _ = hdl
-            .serve(async |_| {
-                info!("[usb] Rebooting to bootloader...");
-                Timer::after_millis(100).await;
-                reboot_to_bootloader();
-            })
-            .await;
+        let _ = hdl.serve(async |_| handle_reboot_to_dfu().await).await;
     }
 }
 
@@ -319,13 +327,8 @@ async fn ble_time_server() {
     let mut get_hdl = get_socket.attach();
 
     loop {
-        let set_fut = set_hdl.serve(async |ts| {
-            CURRENT_TIME.store(*ts, Ordering::Relaxed);
-            info!("[ble] Time set to: {}", ts);
-        });
-
-        let get_fut = get_hdl.serve(async |_| CURRENT_TIME.load(Ordering::Relaxed));
-
+        let set_fut = set_hdl.serve(async |ts| handle_set_time(*ts).await);
+        let get_fut = get_hdl.serve(async |_| handle_get_time());
         select(set_fut, get_fut).await;
     }
 }
@@ -339,13 +342,7 @@ async fn ble_dfu_server() {
     let mut hdl = socket.attach();
 
     loop {
-        let _ = hdl
-            .serve(async |_| {
-                info!("[ble] Rebooting to bootloader...");
-                Timer::after_millis(100).await;
-                reboot_to_bootloader();
-            })
-            .await;
+        let _ = hdl.serve(async |_| handle_reboot_to_dfu().await).await;
     }
 }
 
@@ -660,8 +657,8 @@ async fn main(spawner: Spawner) {
     spawner.spawn(usb_run_tx(tx_impl, USB_OUTQ.framed_consumer()).unwrap());
     spawner.spawn(usb_run_rx(rxvr, USB_RX_BUF.take()).unwrap());
     spawner.spawn(pingserver().unwrap());
-    spawner.spawn(time_server().unwrap());
-    spawner.spawn(dfu_server().unwrap());
+    spawner.spawn(usb_time_server().unwrap());
+    spawner.spawn(usb_dfu_server().unwrap());
 
     info!("USB ergot initialized");
 
