@@ -10,7 +10,7 @@ defmt = { version = "1.0.1", optional = true }
 defmt-rtt = { version = "1.1.0", optional = true }
 embassy-executor = { version = "0.9.1", features = ["arch-cortex-m", "executor-thread", "executor-interrupt"] }
 embassy-futures = "0.1.2"
-embassy-nrf = { version = "0.8.0", features = ["nrf52840", "gpiote", "time-driver-rtc1", "unstable-pac", "rt"] }
+embassy-nrf = { version = "0.9.0", features = ["nrf52840", "gpiote", "time-driver-rtc1", "unstable-pac", "rt"] }
 embassy-sync = "0.7.2"
 embassy-time = { version = "0.5.0", features = ["tick-hz-32_768"] }
 embedded-graphics = "0.8.1"
@@ -20,12 +20,12 @@ ssd1306 = { version = "0.10.0", features = ["async", "graphics"], default-featur
 static_cell = "2.1.1"
 
 # BLE dependencies
-nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "11d5c3c", default-features = false, features = ["peripheral", "nrf52840"] }
-nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "11d5c3c", default-features = false, features = ["critical-section-impl", "nrf52840"] }
-bt-hci = { version = "0.6", default-features = false }
-trouble-host = { version = "0.5", default-features = false, features = ["peripheral", "gatt", "derive"] }
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", default-features = false, features = ["peripheral", "nrf52840"] }
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", default-features = false, features = ["critical-section-impl", "nrf52840"] }
+bt-hci = { version = "0.7", default-features = false }
+trouble-host = { git = "https://github.com/embassy-rs/trouble.git", default-features = false, features = ["peripheral", "gatt", "derive"] }
 rand = { version = "0.8", default-features = false }
-rand_core = "0.6"
+rand_core = "0.9"
 futures = { version = "0.3", default-features = false, features = ["async-await"] }
 heapless = "0.9"
 
