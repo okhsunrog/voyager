@@ -31,6 +31,12 @@ futures = { version = "0.3", default-features = false, features = ["async-await"
 heapless = "0.9"
 chrono = { version = "0.4.42", default-features = false }
 
+# USB/ergot dependencies
+embassy-usb = "0.5"
+ergot = { path = "/home/okhsunrog/code/rust/ergot/crates/ergot", default-features = false, features = ["embassy-usb-v0_5", "embedded-io-async-v0_7", "defmt-v1"] }
+embedded-io-async = "0.7"
+mutex = { version = "1.0", features = ["impl-unsafe-cortex-m-single-core"] }
+
 [patch.crates-io]
 embassy-executor = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-futures = { git = "https://github.com/embassy-rs/embassy.git" }
@@ -41,6 +47,7 @@ embassy-time-driver = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy.git" }
 
 [[bin]]
 name = "voyager"
