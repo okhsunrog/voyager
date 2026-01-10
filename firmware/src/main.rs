@@ -16,7 +16,7 @@ use core::pin::pin;
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use embassy_executor::Spawner;
-use embassy_futures::select::select;
+use embassy_futures::select::{select, select3, Either3};
 use embassy_nrf::gpio::{Level, Output, OutputDrive};
 use embassy_nrf::mode::Async;
 use embassy_nrf::pac::FICR;
@@ -36,7 +36,8 @@ use embedded_graphics::{
     text::{Baseline, Text},
 };
 use ergot::exports::bbq2::{prod_cons::framed::FramedConsumer, traits::coordination::cas::AtomicCoord};
-use ergot::toolkits::embassy_usb_v0_5 as kit;
+use ergot::toolkits::embassy_usb_v0_5 as usb_kit;
+use ergot::toolkits::embedded_io_async_v0_6 as eio_kit;
 use fmt::info;
 use heapless::String;
 use icd::{GetTimeEndpoint, RebootToDfuEndpoint, SetTimeEndpoint};
@@ -83,17 +84,17 @@ type Display = Ssd1306Async<
 // USB Ergot Setup
 // ============================================================================
 
-const OUT_QUEUE_SIZE: usize = 4096;
-const MAX_PACKET_SIZE: usize = 1024;
+const USB_OUT_QUEUE_SIZE: usize = 4096;
+const USB_MAX_PACKET_SIZE: usize = 1024;
 
 type AppDriver = usb::Driver<'static, HardwareVbusDetect>;
-type RxWorker = kit::RxWorker<&'static Queue, ThreadModeRawMutex, AppDriver>;
-type Stack = kit::Stack<&'static Queue, ThreadModeRawMutex>;
-type Queue = kit::Queue<OUT_QUEUE_SIZE, AtomicCoord>;
+type UsbRxWorker = usb_kit::RxWorker<&'static UsbQueue, ThreadModeRawMutex, AppDriver>;
+type UsbStack = usb_kit::Stack<&'static UsbQueue, ThreadModeRawMutex>;
+type UsbQueue = usb_kit::Queue<USB_OUT_QUEUE_SIZE, AtomicCoord>;
 
-static STACK: Stack = kit::new_target_stack(OUTQ.framed_producer(), MAX_PACKET_SIZE as u16);
-static STORAGE: kit::WireStorage<256, 256, 64, 256> = kit::WireStorage::new();
-static OUTQ: Queue = kit::Queue::new();
+static USB_STACK: UsbStack = usb_kit::new_target_stack(USB_OUTQ.framed_producer(), USB_MAX_PACKET_SIZE as u16);
+static USB_STORAGE: usb_kit::WireStorage<256, 256, 64, 256> = usb_kit::WireStorage::new();
+static USB_OUTQ: UsbQueue = usb_kit::Queue::new();
 
 fn usb_config(serial: &'static str) -> Config<'static> {
     let mut config = Config::new(0x16c0, 0x27DD);
@@ -119,37 +120,37 @@ pub async fn usb_task(mut usb: UsbDevice<'static, AppDriver>) {
 }
 
 #[embassy_executor::task]
-async fn run_rx(rcvr: RxWorker, recv_buf: &'static mut [u8]) {
-    rcvr.run(recv_buf, kit::USB_FS_MAX_PACKET_SIZE).await;
+async fn usb_run_rx(rcvr: UsbRxWorker, recv_buf: &'static mut [u8]) {
+    rcvr.run(recv_buf, usb_kit::USB_FS_MAX_PACKET_SIZE).await;
 }
 
 #[embassy_executor::task]
-async fn run_tx(mut ep_in: <AppDriver as Driver<'static>>::EndpointIn, rx: FramedConsumer<&'static Queue>) {
-    kit::tx_worker::<AppDriver, OUT_QUEUE_SIZE, AtomicCoord>(
+async fn usb_run_tx(mut ep_in: <AppDriver as Driver<'static>>::EndpointIn, rx: FramedConsumer<&'static UsbQueue>) {
+    usb_kit::tx_worker::<AppDriver, USB_OUT_QUEUE_SIZE, AtomicCoord>(
         &mut ep_in,
         rx,
-        kit::DEFAULT_TIMEOUT_MS_PER_FRAME,
-        kit::USB_FS_MAX_PACKET_SIZE,
+        usb_kit::DEFAULT_TIMEOUT_MS_PER_FRAME,
+        usb_kit::USB_FS_MAX_PACKET_SIZE,
     )
     .await;
 }
 
 #[embassy_executor::task]
 async fn pingserver() {
-    STACK.services().ping_handler::<4>().await;
+    USB_STACK.services().ping_handler::<4>().await;
 }
 
 #[embassy_executor::task]
 async fn time_server() {
     // Set time endpoint
-    let set_socket = STACK
+    let set_socket = USB_STACK
         .endpoints()
         .bounded_server::<SetTimeEndpoint, 4>(Some("time"));
     let set_socket = pin!(set_socket);
     let mut set_hdl = set_socket.attach();
 
     // Get time endpoint
-    let get_socket = STACK
+    let get_socket = USB_STACK
         .endpoints()
         .bounded_server::<GetTimeEndpoint, 4>(Some("time"));
     let get_socket = pin!(get_socket);
@@ -169,7 +170,7 @@ async fn time_server() {
 
 #[embassy_executor::task]
 async fn dfu_server() {
-    let socket = STACK
+    let socket = USB_STACK
         .endpoints()
         .bounded_server::<RebootToDfuEndpoint, 4>(Some("dfu"));
     let socket = pin!(socket);
@@ -187,7 +188,7 @@ async fn dfu_server() {
 }
 
 // ============================================================================
-// BLE NUS (Nordic UART Service) Setup
+// BLE NUS (Nordic UART Service) with Ergot
 // ============================================================================
 
 // NUS UUIDs
@@ -211,8 +212,142 @@ struct NusService {
     tx: heapless::Vec<u8, 244>,
 }
 
-// Channel for passing received NUS data to ergot
-static NUS_RX_CHANNEL: Channel<CriticalSectionRawMutex, heapless::Vec<u8, 244>, 4> = Channel::new();
+// Channels for NUS data
+static NUS_RX_CHANNEL: Channel<CriticalSectionRawMutex, heapless::Vec<u8, 244>, 8> = Channel::new();
+static NUS_TX_CHANNEL: Channel<CriticalSectionRawMutex, heapless::Vec<u8, 244>, 8> = Channel::new();
+
+// BLE Ergot Stack
+const BLE_OUT_QUEUE_SIZE: usize = 2048;
+const BLE_MAX_PACKET_SIZE: usize = 244;
+
+type BleQueue = eio_kit::Queue<BLE_OUT_QUEUE_SIZE, AtomicCoord>;
+type BleStack = eio_kit::Stack<&'static BleQueue, ThreadModeRawMutex>;
+
+static BLE_OUTQ: BleQueue = eio_kit::Queue::new();
+static BLE_STACK: BleStack = eio_kit::new_target_stack(BLE_OUTQ.stream_producer(), BLE_MAX_PACKET_SIZE as u16);
+
+/// NUS Reader - implements embedded_io_async Read
+struct NusReader {
+    buf: heapless::Vec<u8, 244>,
+    pos: usize,
+}
+
+impl NusReader {
+    const fn new() -> Self {
+        Self {
+            buf: heapless::Vec::new(),
+            pos: 0,
+        }
+    }
+}
+
+impl embedded_io_async_0_6::ErrorType for NusReader {
+    type Error = core::convert::Infallible;
+}
+
+impl embedded_io_async_0_6::Read for NusReader {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        // If we have buffered data, return it
+        if self.pos < self.buf.len() {
+            let remaining = &self.buf[self.pos..];
+            let to_copy = remaining.len().min(buf.len());
+            buf[..to_copy].copy_from_slice(&remaining[..to_copy]);
+            self.pos += to_copy;
+            return Ok(to_copy);
+        }
+
+        // Wait for new data from NUS RX channel
+        let data = NUS_RX_CHANNEL.receive().await;
+        info!("[ble ergot] RX {} bytes from NUS", data.len());
+
+        let to_copy = data.len().min(buf.len());
+        buf[..to_copy].copy_from_slice(&data[..to_copy]);
+
+        // Buffer remaining if any
+        if to_copy < data.len() {
+            self.buf.clear();
+            let _ = self.buf.extend_from_slice(&data[to_copy..]);
+            self.pos = 0;
+        }
+
+        Ok(to_copy)
+    }
+}
+
+/// NUS Writer - implements embedded_io_async Write
+struct NusWriter;
+
+impl embedded_io_async_0_6::ErrorType for NusWriter {
+    type Error = core::convert::Infallible;
+}
+
+impl embedded_io_async_0_6::Write for NusWriter {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        // Send to TX channel for the connection handler to send via notify
+        let mut vec = heapless::Vec::new();
+        let to_send = buf.len().min(244);
+        let _ = vec.extend_from_slice(&buf[..to_send]);
+        NUS_TX_CHANNEL.send(vec).await;
+        info!("[ble ergot] TX {} bytes to NUS", to_send);
+        Ok(to_send)
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+#[embassy_executor::task]
+async fn ble_pingserver() {
+    BLE_STACK.services().ping_handler::<4>().await;
+}
+
+#[embassy_executor::task]
+async fn ble_time_server() {
+    // Set time endpoint
+    let set_socket = BLE_STACK
+        .endpoints()
+        .bounded_server::<SetTimeEndpoint, 4>(Some("time"));
+    let set_socket = pin!(set_socket);
+    let mut set_hdl = set_socket.attach();
+
+    // Get time endpoint
+    let get_socket = BLE_STACK
+        .endpoints()
+        .bounded_server::<GetTimeEndpoint, 4>(Some("time"));
+    let get_socket = pin!(get_socket);
+    let mut get_hdl = get_socket.attach();
+
+    loop {
+        let set_fut = set_hdl.serve(async |ts| {
+            CURRENT_TIME.store(*ts, Ordering::Relaxed);
+            info!("[ble] Time set to: {}", ts);
+        });
+
+        let get_fut = get_hdl.serve(async |_| CURRENT_TIME.load(Ordering::Relaxed));
+
+        select(set_fut, get_fut).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn ble_dfu_server() {
+    let socket = BLE_STACK
+        .endpoints()
+        .bounded_server::<RebootToDfuEndpoint, 4>(Some("dfu"));
+    let socket = pin!(socket);
+    let mut hdl = socket.attach();
+
+    loop {
+        let _ = hdl
+            .serve(async |_| {
+                info!("[ble] Rebooting to bootloader...");
+                Timer::after_millis(100).await;
+                reboot_to_bootloader();
+            })
+            .await;
+    }
+}
 
 #[embassy_executor::task]
 async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
@@ -256,37 +391,54 @@ async fn gatt_events_task<P: PacketPool>(
     conn: &GattConnection<'_, '_, P>,
 ) -> Result<(), Error> {
     let rx_char = &server.nus.rx;
+    let tx_char = &server.nus.tx;
+
     loop {
-        match conn.next().await {
-            GattConnectionEvent::Disconnected { reason } => {
-                info!("[gatt] disconnected: {:?}", reason);
-                break;
+        // Wait for either GATT events or TX data to send
+        let gatt_fut = conn.next();
+        let tx_fut = NUS_TX_CHANNEL.receive();
+
+        match select(gatt_fut, tx_fut).await {
+            embassy_futures::select::Either::First(event) => {
+                match event {
+                    GattConnectionEvent::Disconnected { reason } => {
+                        info!("[gatt] disconnected: {:?}", reason);
+                        break;
+                    }
+                    GattConnectionEvent::Gatt { event } => match event {
+                        GattEvent::Write(event) => {
+                            let handle = event.handle();
+                            if handle == rx_char.handle {
+                                let data = event.data();
+                                info!("[nus] RX {} bytes", data.len());
+                                // Send to ergot via channel
+                                let mut vec = heapless::Vec::new();
+                                let _ = vec.extend_from_slice(data);
+                                let _ = NUS_RX_CHANNEL.try_send(vec);
+                            }
+                            match event.accept() {
+                                Ok(reply) => reply.send().await,
+                                Err(e) => info!("[gatt] error sending response: {:?}", e),
+                            }
+                        }
+                        GattEvent::Read(event) => {
+                            match event.accept() {
+                                Ok(reply) => reply.send().await,
+                                Err(e) => info!("[gatt] error sending response: {:?}", e),
+                            }
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
             }
-            GattConnectionEvent::Gatt { event } => match event {
-                GattEvent::Write(event) => {
-                    let handle = event.handle();
-                    if handle == rx_char.handle {
-                        let data = event.data();
-                        info!("[nus] RX {} bytes", data.len());
-                        // Send to ergot via channel
-                        let mut vec = heapless::Vec::new();
-                        let _ = vec.extend_from_slice(data);
-                        let _ = NUS_RX_CHANNEL.try_send(vec);
-                    }
-                    match event.accept() {
-                        Ok(reply) => reply.send().await,
-                        Err(e) => info!("[gatt] error sending response: {:?}", e),
-                    }
+            embassy_futures::select::Either::Second(tx_data) => {
+                // Send TX data via notify
+                info!("[nus] TX {} bytes via notify", tx_data.len());
+                if let Err(e) = tx_char.notify(conn, &tx_data).await {
+                    info!("[nus] notify error: {:?}", e);
                 }
-                GattEvent::Read(event) => {
-                    match event.accept() {
-                        Ok(reply) => reply.send().await,
-                        Err(e) => info!("[gatt] error sending response: {:?}", e),
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
+            }
         }
     }
     Ok(())
@@ -321,7 +473,7 @@ async fn advertise<'values, 'server, C: Controller>(
     Ok(conn)
 }
 
-async fn run_ble(sdc: nrf_sdc::SoftdeviceController<'static>) {
+async fn run_ble(spawner: Spawner, sdc: nrf_sdc::SoftdeviceController<'static>) {
     let address = Address::random([0xff, 0x8f, 0x1a, 0x05, 0xe4, 0xff]);
     info!("BLE address = {:?}", address);
 
@@ -340,21 +492,53 @@ async fn run_ble(sdc: nrf_sdc::SoftdeviceController<'static>) {
     }))
     .unwrap();
 
-    info!("BLE stack ready (NUS service), starting advertising");
+    // Spawn BLE ergot service tasks
+    spawner.spawn(ble_pingserver().unwrap());
+    spawner.spawn(ble_time_server().unwrap());
+    spawner.spawn(ble_dfu_server().unwrap());
+
+    info!("BLE stack ready (NUS + ergot), starting advertising");
 
     let _ = embassy_futures::join::join(ble_task(runner), async {
         loop {
             match advertise(&mut peripheral, &server).await {
                 Ok(conn) => {
                     info!("Client connected!");
+
+                    // Run ergot RX/TX workers alongside GATT events
+                    let mut nus_reader = NusReader::new();
+                    let mut nus_writer = NusWriter;
+
+                    static FRAME_BUF: ConstStaticCell<[u8; 512]> = ConstStaticCell::new([0u8; 512]);
+                    static SCRATCH_BUF: ConstStaticCell<[u8; 512]> = ConstStaticCell::new([0u8; 512]);
+
+                    // Get buffers (will panic if already taken - OK for single connection)
+                    let frame_buf = FRAME_BUF.take();
+                    let scratch_buf = SCRATCH_BUF.take();
+
+                    let mut rx_worker = eio_kit::RxWorker::new_target(
+                        &BLE_STACK,
+                        &mut nus_reader,
+                        (),
+                    );
+
                     let gatt = gatt_events_task(&server, &conn);
+                    let ergot_rx = rx_worker.run(frame_buf, scratch_buf);
+                    let ergot_tx = eio_kit::tx_worker(&mut nus_writer, BLE_OUTQ.stream_consumer());
                     let time_tick = async {
                         loop {
                             Timer::after_secs(1).await;
                             CURRENT_TIME.fetch_add(1, Ordering::Relaxed);
                         }
                     };
-                    select(gatt, time_tick).await;
+
+                    // Run all concurrently until disconnect
+                    match select3(gatt, select(ergot_rx, ergot_tx), time_tick).await {
+                        Either3::First(_) => info!("GATT task ended"),
+                        Either3::Second(_) => info!("Ergot task ended"),
+                        Either3::Third(_) => info!("Time tick ended"),
+                    }
+
                     info!("Client disconnected, resuming advertising");
                 }
                 Err(e) => {
@@ -467,14 +651,14 @@ async fn main(spawner: Spawner) {
     // Setup USB
     let driver = usb::Driver::new(p.USBD, Irqs, HardwareVbusDetect::new(Irqs));
     let config = usb_config(ser_str);
-    let (device, tx_impl, ep_out) = STORAGE.init_ergot(driver, config);
+    let (device, tx_impl, ep_out) = USB_STORAGE.init_ergot(driver, config);
 
-    static RX_BUF: ConstStaticCell<[u8; MAX_PACKET_SIZE]> = ConstStaticCell::new([0u8; MAX_PACKET_SIZE]);
-    let rxvr: RxWorker = kit::RxWorker::new(&STACK, ep_out);
+    static USB_RX_BUF: ConstStaticCell<[u8; USB_MAX_PACKET_SIZE]> = ConstStaticCell::new([0u8; USB_MAX_PACKET_SIZE]);
+    let rxvr: UsbRxWorker = usb_kit::RxWorker::new(&USB_STACK, ep_out);
 
     spawner.spawn(usb_task(device).unwrap());
-    spawner.spawn(run_tx(tx_impl, OUTQ.framed_consumer()).unwrap());
-    spawner.spawn(run_rx(rxvr, RX_BUF.take()).unwrap());
+    spawner.spawn(usb_run_tx(tx_impl, USB_OUTQ.framed_consumer()).unwrap());
+    spawner.spawn(usb_run_rx(rxvr, USB_RX_BUF.take()).unwrap());
     spawner.spawn(pingserver().unwrap());
     spawner.spawn(time_server().unwrap());
     spawner.spawn(dfu_server().unwrap());
@@ -549,5 +733,5 @@ async fn main(spawner: Spawner) {
     info!("BLE initialized");
 
     // Run BLE directly in main (no unsafe needed)
-    run_ble(sdc).await;
+    run_ble(spawner, sdc).await;
 }

@@ -33,8 +33,8 @@ chrono = { version = "0.4.42", default-features = false }
 
 # USB/ergot dependencies
 embassy-usb = "0.5"
-ergot = { path = "/home/okhsunrog/code/rust/ergot/crates/ergot", default-features = false, features = ["embassy-usb-v0_5", "embedded-io-async-v0_7", "defmt-v1"] }
-embedded-io-async = "0.7"
+ergot = { path = "/home/okhsunrog/code/rust/ergot/crates/ergot", default-features = false, features = ["embassy-usb-v0_5", "embedded-io-async-v0_6", "defmt-v1"] }
+embedded-io-async-0_6 = { version = "0.6", package = "embedded-io-async" }
 mutex = { version = "1.0", features = ["impl-unsafe-cortex-m-single-core"] }
 
 [patch.crates-io]
