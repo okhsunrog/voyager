@@ -145,6 +145,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "chrono"
+version = "0.4.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "145052bdd345b87320e369255277e3fb5152762ad123a901ef5c262dd38fe8d2"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "clang-sys"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1088,6 +1097,9 @@ name = "portable-atomic"
 version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f89776e4d69bb58bc6993e99ffa1d11f228b839984854c7daeb5d37f87cbe950"
+dependencies = [
+ "critical-section",
+]
 
 [[package]]
 name = "prettyplease"
@@ -1551,6 +1563,7 @@ name = "voyager"
 version = "0.1.0"
 dependencies = [
  "bt-hci",
+ "chrono",
  "cortex-m",
  "cortex-m-rt",
  "defmt 1.0.1",
@@ -1567,6 +1580,7 @@ dependencies = [
  "nrf-sdc",
  "panic-halt",
  "panic-probe",
+ "portable-atomic",
  "rand",
  "rand_core 0.9.3",
  "ssd1306",
