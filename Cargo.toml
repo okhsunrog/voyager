@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = [
+    "shared-icd",
+    "voyager-cli",
+    "nrf-dfu",
+]
+exclude = [
+    "firmware",  # Different toolchain (thumbv7em-none-eabihf)
+]
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

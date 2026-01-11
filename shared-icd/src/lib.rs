@@ -1,4 +1,9 @@
-//! Interface Control Document - shared endpoint/topic definitions
+//! Voyager Interface Control Document - shared endpoint/topic definitions
+//!
+//! This crate defines the ergot endpoints and topics used for communication
+//! between the Voyager firmware and host tools.
+
+#![no_std]
 
 use ergot::{endpoint, topic};
 

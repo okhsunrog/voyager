@@ -1,0 +1,7 @@
+[package]
+name = "voyager-icd"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ergot = { version = "0.12", default-features = false }

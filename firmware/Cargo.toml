@@ -4,6 +4,7 @@ name = "voyager"
 version = "0.1.0"
 
 [dependencies]
+voyager-icd = { path = "../shared-icd", optional = true }
 cortex-m = { version = "0.7.7", features = ["inline-asm"] }
 cortex-m-rt = "0.7.5"
 defmt = { version = "1.0.1", optional = true }
@@ -35,38 +36,16 @@ futures = { version = "0.3", default-features = false, features = ["async-await"
 embassy-usb = { version = "0.5", optional = true }
 
 # Ergot dependencies (needed for USB or BLE)
-ergot = { path = "/home/okhsunrog/code/rust/ergot/crates/ergot", default-features = false, features = ["defmt-v1"], optional = true }
+ergot = { path = "/home/okhsunrog/code/rust/ergot/crates/ergot", default-features = false, optional = true }
 embedded-io-async-0_6 = { version = "0.6", package = "embedded-io-async", optional = true }
 mutex = { version = "1.0", features = ["impl-unsafe-cortex-m-single-core"], optional = true }
-
-[patch.crates-io]
-embassy-executor = { git = "https://github.com/embassy-rs/embassy.git" }
-embassy-futures = { git = "https://github.com/embassy-rs/embassy.git" }
-embassy-nrf = { git = "https://github.com/embassy-rs/embassy.git" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy.git" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy.git" }
-embassy-time-driver = { git = "https://github.com/embassy-rs/embassy.git" }
-embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy.git" }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git" }
-embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy.git" }
-embassy-usb = { git = "https://github.com/embassy-rs/embassy.git" }
+log = { version = "0.4.29", optional = true }
+rtt-target = { version = "0.6.2", optional = true }
 
 [[bin]]
 name = "voyager"
 test = false
 bench = false
-
-[profile.dev]
-debug = true
-lto = true
-opt-level = "z"
-incremental = true
-
-[profile.release]
-debug = 2
-lto = true
-opt-level = "z"
-incremental = true
 
 [features]
 defmt = ["dep:defmt"]
@@ -79,6 +58,7 @@ usb = [
     "dep:embassy-usb",
     "dep:ergot",
     "dep:mutex",
+    "dep:voyager-icd",
     "ergot/embassy-usb-v0_5",
 ]
 
@@ -98,6 +78,7 @@ ble = [
     "dep:ergot",
     "dep:embedded-io-async-0_6",
     "dep:mutex",
+    "dep:voyager-icd",
     "ergot/embedded-io-async-v0_6",
 ]
 
@@ -116,4 +97,55 @@ debug = [
     "bt-hci?/defmt",
     "trouble-host?/defmt",
     "embassy-usb?/defmt",
+    "ergot?/defmt-v1",
 ]
+# Log-based debugging via RTT (alternative to defmt, needs debug probe)
+log-rtt = [
+    "dep:log",
+    "dep:rtt-target",
+    "rtt-target/log",
+    "embassy-executor/log",
+    "embassy-sync/log",
+    "embassy-futures/log",
+    "embassy-time/log",
+    "embassy-nrf/log",
+    "nrf-sdc?/log",
+    "nrf-mpsl?/log",
+    "bt-hci?/log",
+    "trouble-host?/log",
+    "embassy-usb?/log",
+]
+
+# Log via ergot over USB (no debug probe needed)
+log-usb = [
+    "usb",
+    "dep:log",
+    "embassy-executor/log",
+    "embassy-sync/log",
+    "embassy-futures/log",
+    "embassy-time/log",
+    "embassy-nrf/log",
+    "embassy-usb/log",
+]
+
+[profile.dev]
+debug = true
+lto = true
+opt-level = "z"
+
+[profile.release]
+debug = 2
+lto = true
+opt-level = "z"
+
+[patch.crates-io]
+embassy-executor = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-nrf = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy.git" }

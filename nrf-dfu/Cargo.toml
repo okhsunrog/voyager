@@ -1,0 +1,15 @@
+[package]
+name = "nrf-dfu"
+version = "0.1.0"
+edition = "2024"
+description = "DFU flashing library for Adafruit nRF52 Bootloader"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+tokio = { version = "1", features = ["time", "io-util"] }
+tokio-serial = "5.4"
+log = "0.4"
+thiserror = "2"
+
+# For ELF parsing
+object = { version = "0.38", default-features = false, features = ["elf", "read_core", "std"] }
