@@ -109,9 +109,7 @@ macro_rules! trace {
         {
             #[cfg(feature = "defmt")]
             ::defmt::trace!($s $(, $x)*);
-            #[cfg(all(any(feature = "log-rtt", feature = "log-usb"), not(feature = "defmt")))]
-            ::log::trace!($s $(, $x)*);
-            #[cfg(not(any(feature = "defmt", feature = "log-rtt", feature = "log-usb")))]
+            #[cfg(feature="defmt")]
             let _ = ($( & $x ),*);
         }
     };
@@ -122,9 +120,7 @@ macro_rules! debug {
         {
             #[cfg(feature = "defmt")]
             ::defmt::debug!($s $(, $x)*);
-            #[cfg(all(any(feature = "log-rtt", feature = "log-usb"), not(feature = "defmt")))]
-            ::log::debug!($s $(, $x)*);
-            #[cfg(not(any(feature = "defmt", feature = "log-rtt", feature = "log-usb")))]
+            #[cfg(not(feature="defmt"))]
             let _ = ($( & $x ),*);
         }
     };
@@ -135,9 +131,7 @@ macro_rules! info {
         {
             #[cfg(feature = "defmt")]
             ::defmt::info!($s $(, $x)*);
-            #[cfg(all(any(feature = "log-rtt", feature = "log-usb"), not(feature = "defmt")))]
-            ::log::info!($s $(, $x)*);
-            #[cfg(not(any(feature = "defmt", feature = "log-rtt", feature = "log-usb")))]
+            #[cfg(not(feature="defmt"))]
             let _ = ($( & $x ),*);
         }
     };
@@ -148,9 +142,7 @@ macro_rules! _warn {
         {
             #[cfg(feature = "defmt")]
             ::defmt::warn!($s $(, $x)*);
-            #[cfg(all(any(feature = "log-rtt", feature = "log-usb"), not(feature = "defmt")))]
-            ::log::warn!($s $(, $x)*);
-            #[cfg(not(any(feature = "defmt", feature = "log-rtt", feature = "log-usb")))]
+            #[cfg(not(feature="defmt"))]
             let _ = ($( & $x ),*);
         }
     };
@@ -161,9 +153,7 @@ macro_rules! error {
         {
             #[cfg(feature = "defmt")]
             ::defmt::error!($s $(, $x)*);
-            #[cfg(all(any(feature = "log-rtt", feature = "log-usb"), not(feature = "defmt")))]
-            ::log::error!($s $(, $x)*);
-            #[cfg(not(any(feature = "defmt", feature = "log-rtt", feature = "log-usb")))]
+            #[cfg(not(feature="defmt"))]
             let _ = ($( & $x ),*);
         }
     };

@@ -9,11 +9,11 @@ use core::fmt::{self, Write};
 use embedded_graphics::{
     draw_target::DrawTarget,
     geometry::Point,
-    image::Image,
     mono_font::{ascii::FONT_9X15, MonoTextStyle},
     pixelcolor::BinaryColor,
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
+    Pixel,
 };
 pub use tinybmp::Bmp;
 
@@ -173,7 +173,12 @@ impl SignalDelay {
 /// Format Distance as "XXX.XXXXXXX AU"
 impl fmt::Display for Distance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{:07} AU", self.integer_part(), self.fractional_part())
+        write!(
+            f,
+            "{}.{:07} AU",
+            self.integer_part(),
+            self.fractional_part()
+        )
     }
 }
 
@@ -193,7 +198,12 @@ impl fmt::Display for SignalDelay {
 
 /// Helper to format Distance into a fixed-size buffer (no_std compatible)
 pub fn format_distance<const N: usize>(dist: &Distance, buf: &mut heapless::String<N>) {
-    let _ = write!(buf, "{}.{:07} AU", dist.integer_part(), dist.fractional_part());
+    let _ = write!(
+        buf,
+        "{}.{:07} AU",
+        dist.integer_part(),
+        dist.fractional_part()
+    );
 }
 
 /// Helper to format SignalDelay into a fixed-size buffer (no_std compatible)
@@ -216,7 +226,11 @@ pub fn format_delay<const N: usize>(delay: &SignalDelay, buf: &mut heapless::Str
 pub const MESSAGE_Y: i32 = 32;
 
 /// Render the info section (top half) showing distance and signal delay
-pub fn render_info<D>(display: &mut D, distance: &Distance, delay: &SignalDelay) -> Result<(), D::Error>
+pub fn render_info<D>(
+    display: &mut D,
+    distance: &Distance,
+    delay: &SignalDelay,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = BinaryColor>,
 {
@@ -231,17 +245,16 @@ where
     format_delay(delay, &mut delay_buf);
 
     // Draw distance (line 1, y=1)
-    embedded_graphics::text::Text::new(&dist_buf, Point::new(1, 14), text_style)
-        .draw(display)?;
+    embedded_graphics::text::Text::new(&dist_buf, Point::new(1, 14), text_style).draw(display)?;
 
     // Draw delay (line 2, y=16)
-    embedded_graphics::text::Text::new(&delay_buf, Point::new(1, 30), text_style)
-        .draw(display)?;
+    embedded_graphics::text::Text::new(&delay_buf, Point::new(1, 30), text_style).draw(display)?;
 
     Ok(())
 }
 
-/// Render the scrolling BMP in the bottom half of the display
+/// Render the scrolling BMP in the bottom half of the display (optimized)
+/// Only draws the visible portion of the BMP to avoid iterating through all pixels
 pub fn render_scrolling_bmp<D>(
     display: &mut D,
     bmp: &Bmp<'_, BinaryColor>,
@@ -251,18 +264,61 @@ where
     D: DrawTarget<Color = BinaryColor>,
 {
     let bmp_width = bmp.bounding_box().size.width as i32;
+    let bmp_height = bmp.bounding_box().size.height as i32;
 
-    // Draw BMP at current scroll position
-    let bmp_pos = Point::new(-scroll_offset, MESSAGE_Y);
-    Image::new(bmp, bmp_pos).draw(display)?;
+    // Only draw pixels that are visible on screen (128 pixels wide)
+    for screen_x in 0..DISPLAY_WIDTH as i32 {
+        // Calculate which BMP x-coordinate this screen pixel corresponds to
+        let bmp_x = (scroll_offset + screen_x) % bmp_width;
 
-    // Seamless looping: draw second copy when needed
-    if scroll_offset > bmp_width - DISPLAY_WIDTH as i32 {
-        let wrap_pos = Point::new(bmp_width - scroll_offset, MESSAGE_Y);
-        Image::new(bmp, wrap_pos).draw(display)?;
+        for bmp_y in 0..bmp_height.min(DISPLAY_HEIGHT as i32 - MESSAGE_Y) {
+            // Get pixel from BMP using the pixels iterator (cached approach would be better)
+            // For now, we'll use a direct calculation approach
+            let screen_y = MESSAGE_Y + bmp_y;
+
+            // Get pixel color from BMP
+            if let Some(color) = get_bmp_pixel(bmp, bmp_x as u32, bmp_y as u32) {
+                if color == BinaryColor::On {
+                    let _ = display.draw_iter(core::iter::once(Pixel(
+                        Point::new(screen_x, screen_y),
+                        BinaryColor::On,
+                    )));
+                }
+            }
+        }
     }
 
     Ok(())
+}
+
+/// Get a single pixel from a BMP at given coordinates
+fn get_bmp_pixel(bmp: &Bmp<'_, BinaryColor>, x: u32, y: u32) -> Option<BinaryColor> {
+    let size = bmp.bounding_box().size;
+    if x >= size.width || y >= size.height {
+        return None;
+    }
+
+    // Use the raw BMP data access
+    let raw = bmp.as_raw();
+    let row_stride = ((size.width + 31) / 32) * 4; // BMP rows are 4-byte aligned
+
+    // BMP stores rows bottom-to-top
+    let flipped_y = size.height - 1 - y;
+    let byte_offset = (flipped_y as usize) * (row_stride as usize) + (x as usize / 8);
+    let bit_offset = 7 - (x % 8); // MSB first in BMP
+
+    let pixel_data = raw.image_data();
+    if byte_offset < pixel_data.len() {
+        let byte = pixel_data[byte_offset];
+        // In 1-bit BMP: 0 = foreground (text), 1 = background
+        if (byte >> bit_offset) & 1 == 0 {
+            Some(BinaryColor::On)
+        } else {
+            Some(BinaryColor::Off)
+        }
+    } else {
+        None
+    }
 }
 
 /// Clear the entire display
