@@ -1,0 +1,17 @@
+[package]
+name = "font_generator"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.53", features = ["derive"] }
+embedded-graphics = "0.8.1"
+fontdue = "0.9.3"
+
+[dev-dependencies]
+embedded-graphics-simulator = "0.8.0"

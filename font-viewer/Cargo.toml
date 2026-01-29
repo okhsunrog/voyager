@@ -1,0 +1,12 @@
+[package]
+name = "font-viewer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+embedded-graphics = "0.8"
+embedded-graphics-simulator = "0.8"
+embedded-text = "0.7.3"
+tinybmp = "0.7"
+voyager-display = { path = "../voyager-display" }
