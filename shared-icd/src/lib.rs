@@ -7,12 +7,12 @@
 
 use ergot::{endpoint, topic};
 
-// Time service endpoints
-endpoint!(SetTimeEndpoint, u64, (), "time/set");
-endpoint!(GetTimeEndpoint, (), u64, "time/get");
+// Time service endpoints (u32 timestamp valid until year 2106)
+endpoint!(SetTimeEndpoint, u32, (), "time/set");
+endpoint!(GetTimeEndpoint, (), u32, "time/get");
 
 // DFU endpoint
 endpoint!(RebootToDfuEndpoint, (), (), "dfu/reboot");
 
 // Topics for notifications
-topic!(TimeUpdatedTopic, u64, "time/updated");
+topic!(TimeUpdatedTopic, u32, "time/updated");

@@ -15,7 +15,9 @@ use {defmt_rtt as _, panic_probe as _};
 #[cfg(feature = "ble")]
 use nrf_mpsl as _;
 
-use chrono::{DateTime, Datelike, Timelike, Utc};
+use voyager_display::{
+    Bmp, Distance, advance_scroll, render_info, render_scrolling_bmp,
+};
 #[cfg(any(feature = "usb", feature = "ble"))]
 use core::pin::pin;
 use embassy_executor::Spawner;
@@ -49,12 +51,7 @@ use embassy_time::Timer;
 use embassy_usb::driver::Driver;
 #[cfg(feature = "usb")]
 use embassy_usb::{Config, UsbDevice};
-use embedded_graphics::{
-    mono_font::{MonoTextStyleBuilder, ascii::FONT_6X10},
-    pixelcolor::BinaryColor,
-    prelude::*,
-    text::{Baseline, Text},
-};
+use embedded_graphics::{pixelcolor::BinaryColor, prelude::*};
 #[cfg(feature = "usb")]
 use ergot::exports::bbq2::prod_cons::framed::FramedConsumer;
 #[cfg(any(feature = "usb", feature = "ble"))]
@@ -64,7 +61,6 @@ use ergot::toolkits::embassy_usb_v0_5 as usb_kit;
 #[cfg(feature = "ble")]
 use ergot::toolkits::embedded_io_async_v0_6 as eio_kit;
 use fmt::info;
-use heapless::String;
 #[cfg(any(feature = "usb", feature = "ble"))]
 use voyager_icd::{GetTimeEndpoint, RebootToDfuEndpoint, SetTimeEndpoint};
 #[cfg(any(feature = "usb", feature = "ble"))]
@@ -73,7 +69,7 @@ use mutex::raw_impls::single_core_thread_mode::ThreadModeRawMutex;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 #[cfg(feature = "ble")]
 use nrf_sdc::{self as sdc, mpsl};
-use portable_atomic::{AtomicU64, Ordering};
+use portable_atomic::{AtomicU32, Ordering};
 use ssd1306::{I2CDisplayInterface, Ssd1306Async, prelude::*};
 use static_cell::{ConstStaticCell, StaticCell};
 #[cfg(feature = "ble")]
@@ -95,13 +91,13 @@ fn reboot_to_bootloader() -> ! {
 // ============================================================================
 
 #[cfg(any(feature = "usb", feature = "ble"))]
-async fn handle_set_time(ts: u64) {
+async fn handle_set_time(ts: u32) {
     CURRENT_TIME.store(ts, Ordering::Relaxed);
     info!("Time set to: {}", ts);
 }
 
 #[cfg(any(feature = "usb", feature = "ble"))]
-fn handle_get_time() -> u64 {
+fn handle_get_time() -> u32 {
     CURRENT_TIME.load(Ordering::Relaxed)
 }
 
@@ -136,7 +132,7 @@ bind_interrupts!(struct Irqs {
 });
 
 // Store timestamp as seconds since Unix epoch
-static CURRENT_TIME: AtomicU64 = AtomicU64::new(0);
+static CURRENT_TIME: AtomicU32 = AtomicU32::new(0);
 
 type Display = Ssd1306Async<
     I2CInterface<Twim<'static>>,
@@ -602,55 +598,39 @@ use ble_ergot::*;
 // Display
 // ============================================================================
 
+/// Greetings bitmap (pre-rendered with greeting-renderer)
+static GREETINGS_BMP: &[u8] = include_bytes!("../assets/greetings.bmp");
+
 #[embassy_executor::task]
 async fn display_task(mut display: Display) {
-    let text_style = MonoTextStyleBuilder::new()
-        .font(&FONT_6X10)
-        .text_color(BinaryColor::On)
-        .build();
+    // Wait a bit for system to stabilize
+    Timer::after_millis(100).await;
+
+    let bmp = Bmp::<BinaryColor>::from_slice(GREETINGS_BMP).unwrap();
+    let bmp_width = bmp.bounding_box().size.width as i32;
+
+    let mut scroll_offset = 0i32;
+    const SCROLL_SPEED: i32 = 2;
 
     loop {
-        Timer::after_millis(500).await;
+        Timer::after_millis(60).await; // ~16 FPS
 
         let ts = CURRENT_TIME.load(Ordering::Relaxed);
 
         display.clear_buffer();
 
-        if ts == 0 {
-            let _ =
-                Text::with_baseline("Waiting for", Point::new(0, 20), text_style, Baseline::Top)
-                    .draw(&mut display);
-            let _ = Text::with_baseline(
-                "time via USB/BLE",
-                Point::new(0, 35),
-                text_style,
-                Baseline::Top,
-            )
-            .draw(&mut display);
-        } else if let Some(dt) = DateTime::<Utc>::from_timestamp(ts as i64, 0) {
-            let mut date_buf: String<16> = String::new();
-            let mut time_buf: String<16> = String::new();
-            use core::fmt::Write;
-            let _ = write!(
-                date_buf,
-                "{:04}-{:02}-{:02}",
-                dt.year(),
-                dt.month(),
-                dt.day()
-            );
-            let _ = write!(
-                time_buf,
-                "{:02}:{:02}:{:02}",
-                dt.hour(),
-                dt.minute(),
-                dt.second()
-            );
+        // Always calculate from timestamp (0 = epoch time)
+        let distance = Distance::from_unix_timestamp(if ts == 0 {
+            voyager_display::EPOCH_UNIX_SECS
+        } else {
+            ts
+        });
+        let delay = distance.signal_delay();
+        let _ = render_info(&mut display, &distance, &delay);
 
-            let _ = Text::with_baseline(&date_buf, Point::new(0, 20), text_style, Baseline::Top)
-                .draw(&mut display);
-            let _ = Text::with_baseline(&time_buf, Point::new(0, 35), text_style, Baseline::Top)
-                .draw(&mut display);
-        }
+        // Render scrolling greetings
+        let _ = render_scrolling_bmp(&mut display, &bmp, scroll_offset);
+        scroll_offset = advance_scroll(scroll_offset, SCROLL_SPEED, bmp_width);
 
         let _ = display.flush().await;
     }
@@ -737,26 +717,7 @@ async fn main(spawner: Spawner) {
     .into_buffered_graphics_mode();
     display.init().await.unwrap();
 
-    let text_style = MonoTextStyleBuilder::new()
-        .font(&FONT_6X10)
-        .text_color(BinaryColor::On)
-        .build();
-    Text::with_baseline("Voyager", Point::new(0, 0), text_style, Baseline::Top)
-        .draw(&mut display)
-        .unwrap();
-    Text::with_baseline(
-        "Initializing...",
-        Point::new(0, 15),
-        text_style,
-        Baseline::Top,
-    )
-    .draw(&mut display)
-    .unwrap();
-    display.flush().await.unwrap();
-
-    spawner.spawn(display_task(display).unwrap());
-
-    // Setup BLE
+    // Setup BLE (must be before display_task to initialize critical-section)
     #[cfg(feature = "ble")]
     {
         info!("Initializing BLE...");
@@ -789,12 +750,18 @@ async fn main(spawner: Spawner) {
 
         info!("BLE initialized");
 
+        // Spawn display task after MPSL is initialized (provides critical-section)
+        spawner.spawn(display_task(display).unwrap());
+
         run_ble(spawner, sdc).await;
     }
 
-    // If no BLE, just keep main alive
+    // If no BLE, spawn display and keep main alive
     #[cfg(not(feature = "ble"))]
-    loop {
-        Timer::after_secs(3600).await;
+    {
+        spawner.spawn(display_task(display).unwrap());
+        loop {
+            Timer::after_secs(3600).await;
+        }
     }
 }

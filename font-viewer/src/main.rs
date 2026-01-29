@@ -1,29 +1,21 @@
 //! Font Viewer - Voyager Display Simulator
 //!
-//! Full display simulation: top half shows info, bottom half scrolls greetings BMP
+//! Full display simulation using shared rendering from voyager-display.
 
 use clap::Parser;
-use embedded_graphics::{
-    image::Image,
-    mono_font::{ascii::FONT_9X15, MonoTextStyle},
-    pixelcolor::BinaryColor,
-    prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
-};
+use embedded_graphics::pixelcolor::BinaryColor;
+use embedded_graphics::prelude::*;
 use embedded_graphics_simulator::{
     BinaryColorTheme, OutputSettingsBuilder, SimulatorDisplay, SimulatorEvent, Window,
     sdl2::Keycode,
 };
-use embedded_text::{TextBox, alignment::HorizontalAlignment, style::TextBoxStyleBuilder};
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tinybmp::Bmp;
-use voyager_display::Distance;
-
-const DISPLAY_WIDTH: u32 = 128;
-const DISPLAY_HEIGHT: u32 = 64;
-const MESSAGE_Y: i32 = 32; // Bottom half for scrolling message
+use voyager_display::{
+    Bmp, Distance, DISPLAY_HEIGHT, DISPLAY_WIDTH,
+    advance_scroll, clear_display, render_info, render_scrolling_bmp,
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "font-viewer")]
@@ -55,8 +47,7 @@ fn main() {
     });
 
     let bmp_width = bmp.bounding_box().size.width as i32;
-    let bmp_height = bmp.bounding_box().size.height as i32;
-    println!("BMP size: {}x{} pixels", bmp_width, bmp_height);
+    println!("BMP size: {}x{} pixels", bmp_width, bmp.bounding_box().size.height);
 
     run_viewer(&bmp, bmp_width, args.scale);
 }
@@ -68,6 +59,8 @@ fn run_viewer(bmp: &Bmp<BinaryColor>, bmp_width: i32, scale: u32) {
         .build();
 
     let mut window = Window::new("Voyager Display Simulator - ESC to exit", &output_settings);
+    let mut display: SimulatorDisplay<BinaryColor> =
+        SimulatorDisplay::new(Size::new(DISPLAY_WIDTH, DISPLAY_HEIGHT));
 
     println!("\nControls:");
     println!("  ESC/Q     - Exit");
@@ -78,62 +71,40 @@ fn run_viewer(bmp: &Bmp<BinaryColor>, bmp_width: i32, scale: u32) {
     let mut scroll_paused = false;
     let mut scroll_offset = 0i32;
     let mut scroll_speed = 2;
-
-    let character_style = MonoTextStyle::new(&FONT_9X15, BinaryColor::On);
-    let textbox_style = TextBoxStyleBuilder::new()
-        .alignment(HorizontalAlignment::Left)
-        .build();
+    let mut last_unix_secs = 0u64;
 
     'running: loop {
-        let mut display: SimulatorDisplay<BinaryColor> =
-            SimulatorDisplay::new(Size::new(DISPLAY_WIDTH, DISPLAY_HEIGHT));
-
-        // Clear display
-        Rectangle::new(Point::zero(), display.size())
-            .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
-            .draw(&mut display)
-            .unwrap();
-
-        // Get current time and calculate real Voyager 1 distance
+        // Get current time
         let unix_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let distance = Distance::from_unix_timestamp(unix_secs);
-        let delay = distance.signal_delay();
 
-        // === Top half: Info display (2 lines, 15px each) ===
-        let distance_str = distance.to_string();
-        let bounds = Rectangle::new(Point::new(1, 1), Size::new(126, 15));
-        TextBox::with_textbox_style(&distance_str, bounds, character_style, textbox_style)
-            .draw(&mut display)
-            .unwrap();
+        // Only redraw if time changed or scrolling
+        let needs_redraw = !scroll_paused || unix_secs != last_unix_secs;
+        last_unix_secs = unix_secs;
 
-        let delay_str = delay.to_string();
-        let bounds = Rectangle::new(Point::new(1, 16), Size::new(126, 15));
-        TextBox::with_textbox_style(&delay_str, bounds, character_style, textbox_style)
-            .draw(&mut display)
-            .unwrap();
+        if needs_redraw {
+            // Clear display
+            clear_display(&mut display).unwrap();
 
-        // === Bottom half: Scrolling BMP ===
-        let bmp_pos = Point::new(-scroll_offset, MESSAGE_Y);
-        Image::new(bmp, bmp_pos).draw(&mut display).unwrap();
+            // Calculate real Voyager 1 distance
+            let distance = Distance::from_unix_timestamp(unix_secs);
+            let delay = distance.signal_delay();
 
-        // Seamless looping
-        if scroll_offset > bmp_width - DISPLAY_WIDTH as i32 {
-            let wrap_pos = Point::new(bmp_width - scroll_offset, MESSAGE_Y);
-            Image::new(bmp, wrap_pos).draw(&mut display).unwrap();
-        }
+            // Render info section (top half)
+            render_info(&mut display, &distance, &delay).unwrap();
 
-        // Scroll animation
-        if !scroll_paused {
-            scroll_offset += scroll_speed;
-            if scroll_offset >= bmp_width {
-                scroll_offset = 0;
+            // Render scrolling BMP (bottom half)
+            render_scrolling_bmp(&mut display, bmp, scroll_offset).unwrap();
+
+            // Scroll animation
+            if !scroll_paused {
+                scroll_offset = advance_scroll(scroll_offset, scroll_speed, bmp_width);
             }
-        }
 
-        window.update(&display);
+            window.update(&display);
+        }
 
         // Handle events
         for event in window.events() {
@@ -157,7 +128,8 @@ fn run_viewer(bmp: &Bmp<BinaryColor>, bmp_width: i32, scale: u32) {
             }
         }
 
-        thread::sleep(Duration::from_millis(30));
+        // 60ms = ~16 FPS, enough for smooth scrolling while saving CPU
+        thread::sleep(Duration::from_millis(60));
     }
 
     println!("Simulator closed.");

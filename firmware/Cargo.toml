@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [dependencies]
 voyager-icd = { path = "../shared-icd", optional = true }
+voyager-display = { path = "../voyager-display" }
 cortex-m = { version = "0.7.7", features = ["inline-asm"] }
 cortex-m-rt = "0.7.5"
 defmt = { version = "1.0.1", optional = true }
@@ -21,7 +22,6 @@ ssd1306 = { version = "0.10.0", features = ["async", "graphics"], default-featur
 static_cell = "2.1.1"
 portable-atomic = { version = "1.10", features = ["critical-section"] }
 heapless = "0.9"
-chrono = { version = "0.4.42", default-features = false }
 
 # BLE dependencies (optional)
 nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", default-features = false, features = ["peripheral", "nrf52840"], optional = true }
@@ -149,3 +149,4 @@ embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-usb = { git = "https://github.com/embassy-rs/embassy.git" }
+ergot = { path = "/home/okhsunrog/code/rust/ergot/crates/ergot" }

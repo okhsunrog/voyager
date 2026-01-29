@@ -4,7 +4,8 @@ members = [
     "shared-icd",
     "voyager-cli",
     "nrf-dfu",
-    "font-generator", "font-viewer", "voyager-display",
+    "font-viewer",
+    "voyager-display",
     "greeting-renderer",
 ]
 exclude = [

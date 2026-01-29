@@ -40,7 +40,7 @@ impl Default for Brush {
 #[command(about = "Pre-render greetings to bitmap for embedded display")]
 struct Args {
     /// Input greetings file (format: "Language: message")
-    #[arg(short, long, default_value = "font-generator/greetings.txt")]
+    #[arg(short, long, default_value = "greeting-renderer/greetings.txt")]
     input: PathBuf,
 
     /// Output BMP file for firmware

@@ -6,6 +6,16 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use core::fmt::{self, Write};
+use embedded_graphics::{
+    draw_target::DrawTarget,
+    geometry::Point,
+    image::Image,
+    mono_font::{ascii::FONT_9X15, MonoTextStyle},
+    pixelcolor::BinaryColor,
+    prelude::*,
+    primitives::{PrimitiveStyle, Rectangle},
+};
+pub use tinybmp::Bmp;
 
 // ============================================================================
 // Voyager 1 Ephemeris Reference (from NASA JPL Horizons)
@@ -19,8 +29,8 @@ use core::fmt::{self, Write};
 // ============================================================================
 
 /// Reference epoch: January 1, 2025 00:00:00 UTC
-/// Unix timestamp: 1735689600
-pub const EPOCH_UNIX_SECS: u64 = 1735689600;
+/// Unix timestamp: 1735689600 (u32 valid until year 2106)
+pub const EPOCH_UNIX_SECS: u32 = 1735689600;
 
 /// Distance at epoch in units of 10^-7 AU
 /// 165.6962 AU = 1,656,962,000 units
@@ -81,16 +91,16 @@ impl Distance {
     ///
     /// Uses linear extrapolation from epoch reference point.
     /// Accurate enough for display purposes (real trajectory has minor variations).
-    pub fn from_unix_timestamp(unix_secs: u64) -> Self {
+    pub fn from_unix_timestamp(unix_secs: u32) -> Self {
         if unix_secs >= EPOCH_UNIX_SECS {
-            let elapsed_secs = unix_secs - EPOCH_UNIX_SECS;
+            let elapsed_secs = (unix_secs - EPOCH_UNIX_SECS) as u64;
             // distance = epoch_distance + velocity * time
             // velocity = 11285 units per 10000 seconds
             let delta_units = elapsed_secs * VELOCITY_UNITS_PER_10000_SEC / 10000;
             Self(EPOCH_DISTANCE_UNITS + delta_units)
         } else {
             // Before epoch - extrapolate backwards
-            let elapsed_secs = EPOCH_UNIX_SECS - unix_secs;
+            let elapsed_secs = (EPOCH_UNIX_SECS - unix_secs) as u64;
             let delta_units = elapsed_secs * VELOCITY_UNITS_PER_10000_SEC / 10000;
             Self(EPOCH_DISTANCE_UNITS.saturating_sub(delta_units))
         }
@@ -198,6 +208,83 @@ pub fn format_delay<const N: usize>(delay: &SignalDelay, buf: &mut heapless::Str
     );
 }
 
+// ============================================================================
+// Display Rendering
+// ============================================================================
+
+/// Y position where the bottom half (scrolling message) starts
+pub const MESSAGE_Y: i32 = 32;
+
+/// Render the info section (top half) showing distance and signal delay
+pub fn render_info<D>(display: &mut D, distance: &Distance, delay: &SignalDelay) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = BinaryColor>,
+{
+    let text_style = MonoTextStyle::new(&FONT_9X15, BinaryColor::On);
+
+    // Format distance
+    let mut dist_buf: heapless::String<32> = heapless::String::new();
+    format_distance(distance, &mut dist_buf);
+
+    // Format delay
+    let mut delay_buf: heapless::String<32> = heapless::String::new();
+    format_delay(delay, &mut delay_buf);
+
+    // Draw distance (line 1, y=1)
+    embedded_graphics::text::Text::new(&dist_buf, Point::new(1, 14), text_style)
+        .draw(display)?;
+
+    // Draw delay (line 2, y=16)
+    embedded_graphics::text::Text::new(&delay_buf, Point::new(1, 30), text_style)
+        .draw(display)?;
+
+    Ok(())
+}
+
+/// Render the scrolling BMP in the bottom half of the display
+pub fn render_scrolling_bmp<D>(
+    display: &mut D,
+    bmp: &Bmp<'_, BinaryColor>,
+    scroll_offset: i32,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = BinaryColor>,
+{
+    let bmp_width = bmp.bounding_box().size.width as i32;
+
+    // Draw BMP at current scroll position
+    let bmp_pos = Point::new(-scroll_offset, MESSAGE_Y);
+    Image::new(bmp, bmp_pos).draw(display)?;
+
+    // Seamless looping: draw second copy when needed
+    if scroll_offset > bmp_width - DISPLAY_WIDTH as i32 {
+        let wrap_pos = Point::new(bmp_width - scroll_offset, MESSAGE_Y);
+        Image::new(bmp, wrap_pos).draw(display)?;
+    }
+
+    Ok(())
+}
+
+/// Clear the entire display
+pub fn clear_display<D>(display: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = BinaryColor>,
+{
+    Rectangle::new(Point::zero(), Size::new(DISPLAY_WIDTH, DISPLAY_HEIGHT))
+        .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
+        .draw(display)
+}
+
+/// Calculate the next scroll offset for animation
+pub fn advance_scroll(scroll_offset: i32, speed: i32, bmp_width: i32) -> i32 {
+    let new_offset = scroll_offset + speed;
+    if new_offset >= bmp_width {
+        0
+    } else {
+        new_offset
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +320,12 @@ mod tests {
         let s = delay.to_string();
         // 170 AU * 499 sec/AU = 84830 sec = 23:33:50
         assert!(s.starts_with("23:33:"));
+    }
+
+    #[test]
+    fn test_scroll_advance() {
+        assert_eq!(advance_scroll(0, 2, 100), 2);
+        assert_eq!(advance_scroll(98, 2, 100), 0); // wraps
+        assert_eq!(advance_scroll(50, 2, 100), 52);
     }
 }
