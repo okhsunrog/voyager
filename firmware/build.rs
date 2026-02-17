@@ -1,19 +1,13 @@
-// This file was automatically generated.
-
-//! This build script copies the `memory.x` file from the crate root into
-//! a directory where the linker can always find it at build time.
-//! For many projects this is optional, as the linker always searches the
-//! project root directory -- wherever `Cargo.toml` is. However, if you
-//! are using a workspace or have a more complicated build setup, this
-//! build script becomes required. Additionally, by requesting that
-//! Cargo re-run the build script whenever `memory.x` is changed,
-//! updating `memory.x` ensures a rebuild of the application with the
-//! new memory settings.
+//! Build script for Voyager firmware.
+//!
+//! - Copies `memory.x` linker script to output directory
+//! - Generates compile-time Unix timestamp for distance tracking
 
 use std::env;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
     // Put `memory.x` in our output directory and ensure it's
@@ -25,14 +19,16 @@ fn main() {
         .unwrap();
     println!("cargo:rustc-link-search={}", out.display());
 
-    // By default, Cargo will re-run a build script whenever
-    // any file in the project changes. By specifying `memory.x`
-    // here, we ensure the build script is only re-run when
-    // `memory.x` is changed.
+    // Re-run build script when memory.x changes
     println!("cargo:rerun-if-changed=memory.x");
+
+    // Generate compile-time Unix timestamp
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+    println!("cargo::rustc-env=BUILD_TIMESTAMP={}", timestamp);
 
     println!("cargo:rustc-link-arg-bins=--nmagic");
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
-    #[cfg(feature = "defmt")]
-    println!("cargo:rustc-link-arg-bins=-Tdefmt.x");
 }
