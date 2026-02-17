@@ -1,52 +1,71 @@
 # Voyager project commands
 
-# Default recipe - show available commands
-default:
-    @just --list
+# App port: auto-detect by USB product name
+APP_PORT := `ls /dev/serial/by-id/usb-Voyager_Voyager_CDC_* 2>/dev/null | head -1 || echo ""`
+# Bootloader port: auto-detect Adafruit nRF52 bootloader
+BL_PORT := `ls /dev/serial/by-id/usb-Seeed_* /dev/serial/by-id/usb-Nice_Keyboards_* /dev/serial/by-id/usb-Adafruit_* 2>/dev/null | head -1 || echo ""`
+
+default: uf2
 
 # Build the firmware
 build:
-    cargo build -p firmware --release
+    cd firmware && cargo build --release
 
-# Flash firmware via DFU and monitor logs
-flash: build
-    cargo run -p voyager-cli --release -- {{target_dir}}/thumbv7em-none-eabihf/release/firmware
+# Convert to ihex
+objcopy: build
+    cd firmware && cargo objcopy --release --bin voyager -- -O ihex ../voyager.hex
 
-# Flash firmware without monitoring
-flash-only: build
-    cargo run -p voyager-cli --release -- {{target_dir}}/thumbv7em-none-eabihf/release/firmware flash --no-monitor
+# Convert to UF2
+uf2: objcopy
+    cargo hex-to-uf2 --input-path voyager.hex --output-path voyager.uf2 --family nrf52840
 
-# Stream logs from device (USB)
-logs:
-    cargo run -p voyager-cli --release -- logs
+# Create DFU package
+dfu-pkg: objcopy
+    adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application voyager.hex voyager.zip
 
-# Stream logs from device (BLE)
-logs-ble device="":
-    cargo run -p voyager-cli --release -- --transport ble {{if device != "" { "--ble-device " + device } else { "" }}} logs
+# Enter bootloader via 1200-baud touch, then DFU flash
+dfu: dfu-pkg
+    #!/usr/bin/env bash
+    set -euo pipefail
+    APP="{{APP_PORT}}"
+    if [ -z "$APP" ]; then
+        echo "Error: app port not found. Is the firmware running?"
+        exit 1
+    fi
+    # Touch at 1200 baud to trigger bootloader reset
+    timeout 3 python3 -c "import serial, time; s = serial.Serial('$APP', 1200); time.sleep(0.1); s.close()" 2>/dev/null || true
+    echo "Triggered 1200-baud reset, waiting for bootloader..."
+    # Wait for bootloader port to appear (up to 10s)
+    BL=""
+    for i in $(seq 1 10); do
+        BL=$(ls /dev/serial/by-id/usb-Seeed_* /dev/serial/by-id/usb-Nice_Keyboards_* /dev/serial/by-id/usb-Adafruit_* 2>/dev/null | head -1 || true)
+        if [ -n "$BL" ]; then
+            break
+        fi
+        sleep 1
+    done
+    if [ -z "$BL" ]; then
+        echo "Error: bootloader port not found"
+        exit 1
+    fi
+    sleep 1
+    # DFU on the bootloader's serial port
+    adafruit-nrfutil dfu serial --package voyager.zip -p "$BL" -b 115200
 
-# Set device time to current time
-set-time:
-    cargo run -p voyager-cli --release -- set-time
+# DFU flash when already in bootloader mode
+dfu-bl: dfu-pkg
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BL="{{BL_PORT}}"
+    if [ -z "$BL" ]; then
+        echo "Error: bootloader port not found. Double-tap reset to enter bootloader."
+        exit 1
+    fi
+    adafruit-nrfutil dfu serial --package voyager.zip -p "$BL" -b 115200
 
-# Get device time
-get-time:
-    cargo run -p voyager-cli --release -- get-time
-
-# Reboot device into DFU mode
-reboot-dfu:
-    cargo run -p voyager-cli --release -- reboot-dfu
-
-# Scan for BLE devices with NUS service
-scan-ble duration="5":
-    cargo run -p voyager-cli --release -- scan-ble --duration {{duration}}
-
-# Build voyager-cli
-build-cli:
-    cargo build -p voyager-cli --release
-
-# Run clippy on all crates
+# Run clippy
 clippy:
-    cargo clippy --all
+    cd firmware && cargo clippy --release
 
 # Format all code
 fmt:
@@ -59,6 +78,3 @@ fmt-check:
 # Clean build artifacts
 clean:
     cargo clean
-
-# Private: get target directory
-target_dir := `cargo metadata --format-version 1 | jq -r .target_directory`
