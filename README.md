@@ -6,14 +6,14 @@ Tested on nice!nano v2 and Seeed XIAO nRF52840 Sense with Adafruit nRF52 bootloa
 
 ## Getting started
 
-The `firmwares/` directory contains pre-built UF2/hex files for board setup. Pick the section that matches your board's current state.
+The `prebuilt/` directory contains pre-built UF2/hex files for board setup. Pick the section that matches your board's current state.
 
 ### Board without a bootloader (bare nRF52840)
 
 Flash the Adafruit bootloader using a debug probe (J-Link, ST-Link, etc.):
 
 ```sh
-nrfjprog --program firmwares/nice_nano_bootloader-0.9.0_nosd.hex --chiperase -f nrf52 --reset
+nrfjprog --program prebuilt/nice_nano_bootloader-0.9.0_nosd.hex --chiperase -f nrf52 --reset
 ```
 
 After flashing, the board will boot into the Adafruit bootloader (LED pulses). The SoftDevice is not included, so `memory.x` is already correct (`ORIGIN = 0x1000`) — skip straight to [Building and flashing](#building-and-flashing).
@@ -21,14 +21,14 @@ After flashing, the board will boot into the Adafruit bootloader (LED pulses). T
 ### Board with bootloader and S140 v6.1.1 (nice!nano v2)
 
 1. Double-tap reset to enter bootloader mode
-2. Copy `firmwares/erase-sd-s140-v6.1.1.uf2` to the USB drive that appears
+2. Copy `prebuilt/erase-sd-s140-v6.1.1.uf2` to the USB drive that appears
 3. Board erases the SoftDevice and reboots into bootloader
 4. Verify: mount the UF2 drive and check `INFO_UF2.TXT` shows `SoftDevice: not found`
 
 ### Board with bootloader and S140 v7.3.0 (Seeed XIAO)
 
 1. Double-tap reset to enter bootloader mode
-2. Copy `firmwares/erase-sd-s140-v7.3.0.uf2` to the USB drive that appears
+2. Copy `prebuilt/erase-sd-s140-v7.3.0.uf2` to the USB drive that appears
 3. Board erases the SoftDevice and reboots into bootloader
 4. Verify: mount the UF2 drive and check `INFO_UF2.TXT` shows `SoftDevice: not found`
 
