@@ -211,6 +211,7 @@ async fn main() -> bluer::Result<()> {
         let discover = adapter.discover_devices().await?;
         tokio::pin!(discover);
 
+        // Scan phase: find Voyager and collect its data, but don't connect yet
         let scan_result = timeout(Duration::from_secs(60), async {
             while let Some(evt) = discover.next().await {
                 if let AdapterEvent::DeviceAdded(addr) = evt {
@@ -232,27 +233,30 @@ async fn main() -> bluer::Result<()> {
                         println!(
                             "  Found {DEVICE_NAME}: time={dev_time} bat={bat_mv}mV drift={drift}s"
                         );
-                        if drift.unsigned_abs() > DRIFT_THRESHOLD_SECS as u64 {
-                            println!("  Drift exceeds {DRIFT_THRESHOLD_SECS}s, syncing...");
-                            if let Err(e) = sync_time(&device).await {
-                                eprintln!("  Sync failed: {e}");
-                            } else {
-                                metrics.syncs_total.fetch_add(1, Ordering::Relaxed);
-                            }
-                        }
-                        return bluer::Result::Ok(());
+                        return bluer::Result::Ok(Some((device, drift)));
                     }
                 }
             }
-            Ok(())
+            Ok(None)
         })
         .await;
 
-        // Drop the discovery stream before sleeping
+        // Drop the discovery stream before connecting — avoids scan timeout racing with sync
         drop(discover);
 
         match scan_result {
-            Ok(Ok(())) => {}
+            Ok(Ok(Some((device, drift)))) => {
+                if drift.unsigned_abs() > DRIFT_THRESHOLD_SECS as u64 {
+                    println!("  Drift exceeds {DRIFT_THRESHOLD_SECS}s, syncing...");
+                    if let Err(e) = sync_time(&device).await {
+                        eprintln!("  Sync failed: {e}");
+                    } else {
+                                        metrics.syncs_total.fetch_add(1, Ordering::Relaxed);
+                                        metrics.drift_secs.store(0, Ordering::Relaxed);
+                                    }
+                }
+            }
+            Ok(Ok(None)) => {}
             Ok(Err(e)) => eprintln!("Scan error: {e}"),
             Err(_) => println!("  Scan timeout, no Voyager found"),
         }
