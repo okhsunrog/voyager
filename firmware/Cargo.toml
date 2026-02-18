@@ -8,6 +8,18 @@ name = "voyager"
 test = false
 bench = false
 
+[[bin]]
+name = "erase-sd-s140v6_1_1"
+path = "src/erase_sd_s140v6_1_1.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "erase-sd-s140v7_3_0"
+path = "src/erase_sd_s140v7_3_0.rs"
+test = false
+bench = false
+
 [dependencies]
 voyager-display = { path = "../voyager-display" }
 

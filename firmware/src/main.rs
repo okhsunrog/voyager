@@ -7,6 +7,7 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_nrf::gpio::{Level, Output, OutputDrive};
 use embassy_nrf::peripherals::RNG;
+// use embassy_nrf::saadc::{self, Saadc};
 use embassy_nrf::twim::{self, Twim};
 use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
 use embassy_nrf::usb::Driver;
@@ -47,6 +48,9 @@ const BUILD_TIMESTAMP: u32 = parse_u32(env!("BUILD_TIMESTAMP"));
 /// Current time in Unix seconds — single source of truth
 static CURRENT_TIME: AtomicU32 = AtomicU32::new(BUILD_TIMESTAMP);
 
+// /// Battery voltage in millivolts
+// static BATTERY_MV: AtomicU32 = AtomicU32::new(0);
+
 /// Greetings bitmap (pre-rendered with greeting-renderer)
 static GREETINGS_BMP: &[u8] = include_bytes!("../assets/greetings.bmp");
 
@@ -59,6 +63,7 @@ bind_interrupts!(struct Irqs {
     TIMER0 => nrf_sdc::mpsl::HighPrioInterruptHandler;
     RTC0 => nrf_sdc::mpsl::HighPrioInterruptHandler;
     TWISPI0 => twim::InterruptHandler<peripherals::TWISPI0>;
+    // SAADC => saadc::InterruptHandler;
 });
 
 #[embassy_executor::task]
@@ -85,6 +90,22 @@ async fn time_tick_task() {
         CURRENT_TIME.fetch_add(1, Ordering::Relaxed);
     }
 }
+
+// /// Battery measurement task - samples P0.04 via 806k/2M voltage divider every 60s
+// #[embassy_executor::task]
+// async fn battery_task(mut saadc: Saadc<'static, 1>) {
+//     loop {
+//         let mut buf = [0i16; 1];
+//         saadc.sample(&mut buf).await;
+//         let raw = buf[0].max(0) as u32;
+//         // Gain 1/6, internal 0.6V ref → full scale 3.6V at 12-bit (4095)
+//         // Undo 806k/2M voltage divider: × (806k + 2M) / 2M = × 2806 / 2000
+//         let battery_mv = raw * 3600 / 4095 * 2806 / 2000;
+//         BATTERY_MV.store(battery_mv, Ordering::Relaxed);
+//         info!("[battery] {}mV", battery_mv);
+//         Timer::after(Duration::from_secs(60)).await;
+//     }
+// }
 
 /// How many outgoing L2CAP buffers per link
 const L2CAP_TXQ: u8 = 3;
@@ -115,6 +136,7 @@ fn build_sdc<'d, const N: usize>(
 #[gatt_server]
 struct Server {
     time_service: TimeService,
+    // battery_service: BatteryService,
 }
 
 #[gatt_service(uuid = "a2d7a6e0-5e7b-4f1c-8a3d-b2c9f0e1d4a8")]
@@ -122,6 +144,24 @@ struct TimeService {
     #[characteristic(uuid = "a2d7a6e1-5e7b-4f1c-8a3d-b2c9f0e1d4a8", read, write)]
     unix_time: u32,
 }
+
+// #[gatt_service(uuid = service::BATTERY)]
+// struct BatteryService {
+//     #[characteristic(uuid = characteristic::BATTERY_LEVEL, read, notify, value = 0)]
+//     level: u8,
+// }
+//
+// /// Convert battery millivolts to percentage (0-100)
+// /// LiPo discharge curve approximation: 4200mV = 100%, 3000mV = 0%
+// fn battery_mv_to_percent(mv: u32) -> u8 {
+//     if mv >= 4200 {
+//         100
+//     } else if mv <= 3000 {
+//         0
+//     } else {
+//         ((mv - 3000) * 100 / 1200) as u8
+//     }
+// }
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -136,6 +176,12 @@ async fn main(spawner: Spawner) {
 
     // Time tick task
     spawner.spawn(time_tick_task()).unwrap();
+
+    // // Battery measurement via P0.04 (806k/2M voltage divider)
+    // let mut ch_config = saadc::ChannelConfig::single_ended(p.P0_04);
+    // ch_config.time = saadc::Time::_40US; // needed for high-impedance 806k source
+    // let saadc_inst = Saadc::new(p.SAADC, Irqs, saadc::Config::default(), [ch_config]);
+    // spawner.spawn(battery_task(saadc_inst)).unwrap();
 
     LOGGER.init(log::LevelFilter::Info);
 
@@ -281,6 +327,7 @@ async fn run(
     // BLE advertising + connection handling
     let ble_peripheral_fut = async {
         let unix_time = server.time_service.unix_time;
+        // let battery_level = server.battery_service.level;
         loop {
             let mut adv_data = [0; 31];
             let len = AdStructure::encode_slice(
@@ -349,6 +396,9 @@ async fn run(
                                 if event.handle() == unix_time.handle {
                                     let ts = CURRENT_TIME.load(Ordering::Relaxed);
                                     info!("[ble] time read: {}", ts);
+                                // } else if event.handle() == battery_level.handle {
+                                //     let pct = battery_mv_to_percent(BATTERY_MV.load(Ordering::Relaxed));
+                                //     info!("[ble] battery read: {}%", pct);
                                 }
                             }
                             _ => {}

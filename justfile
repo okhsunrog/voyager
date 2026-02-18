@@ -13,15 +13,15 @@ build:
 
 # Convert to ihex
 objcopy: build
-    cd firmware && cargo objcopy --release --bin voyager -- -O ihex ../voyager.hex
+    cd firmware && cargo objcopy --release --bin voyager -- -O ihex target/voyager.hex
 
 # Convert to UF2
 uf2: objcopy
-    cargo hex-to-uf2 --input-path voyager.hex --output-path voyager.uf2 --family nrf52840
+    cargo hex-to-uf2 --input-path firmware/target/voyager.hex --output-path firmware/target/voyager.uf2 --family nrf52840
 
 # Create DFU package
 dfu-pkg: objcopy
-    adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application voyager.hex voyager.zip
+    adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application firmware/target/voyager.hex firmware/target/voyager.zip
 
 # Enter bootloader via 1200-baud touch, then DFU flash
 dfu: dfu-pkg
@@ -50,7 +50,7 @@ dfu: dfu-pkg
     fi
     sleep 1
     # DFU on the bootloader's serial port
-    adafruit-nrfutil dfu serial --package voyager.zip -p "$BL" -b 115200
+    adafruit-nrfutil dfu serial --package firmware/target/voyager.zip -p "$BL" -b 115200
 
 # DFU flash when already in bootloader mode
 dfu-bl: dfu-pkg
@@ -61,7 +61,7 @@ dfu-bl: dfu-pkg
         echo "Error: bootloader port not found. Double-tap reset to enter bootloader."
         exit 1
     fi
-    adafruit-nrfutil dfu serial --package voyager.zip -p "$BL" -b 115200
+    adafruit-nrfutil dfu serial --package firmware/target/voyager.zip -p "$BL" -b 115200
 
 # Run clippy
 clippy:
