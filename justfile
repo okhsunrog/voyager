@@ -75,6 +75,10 @@ fmt:
 fmt-check:
     cargo fmt --all -- --check
 
+# Cross-compile voyager-host for Raspberry Pi (aarch64)
+host-rpi:
+    cross build -p voyager-host --release --target aarch64-unknown-linux-gnu
+
 # Clean build artifacts
 clean:
     cargo clean

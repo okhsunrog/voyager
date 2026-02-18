@@ -158,11 +158,30 @@ Linux daemon that monitors the Voyager device over BLE and keeps its clock in sy
 3. If clock drift exceeds 3 minutes, connects via GATT and writes the correct time
 4. Exposes Prometheus metrics on port 9777
 
-### Running
+### Running locally
 
 ```sh
 cargo run -p voyager-host
 ```
+
+### Deploying to Raspberry Pi
+
+Cross-compile for aarch64 (requires `cross` and Docker):
+
+```sh
+cargo install cross
+just host-rpi
+```
+
+Copy the binary and systemd unit to the Pi:
+
+```sh
+scp target/aarch64-unknown-linux-gnu/release/voyager-host pi@raspberrypi:/usr/local/bin/
+scp voyager-host/voyager-host.service pi@raspberrypi:/etc/systemd/system/
+ssh pi@raspberrypi 'sudo systemctl enable --now voyager-host'
+```
+
+Logs: `journalctl -u voyager-host -f`
 
 ### Prometheus metrics
 
