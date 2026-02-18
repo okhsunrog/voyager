@@ -187,7 +187,9 @@ async fn main(spawner: Spawner) {
 
     // Battery measurement via VDDH/5 internal channel (no external components needed)
     let ch_vddh = saadc::ChannelConfig::single_ended(VddhDiv5Input);
-    let saadc_inst = Saadc::new(p.SAADC, Irqs, saadc::Config::default(), [ch_vddh]);
+    let mut saadc_config = saadc::Config::default();
+    saadc_config.oversample = saadc::Oversample::OVER16X;
+    let saadc_inst = Saadc::new(p.SAADC, Irqs, saadc_config, [ch_vddh]);
     spawner.spawn(battery_task(saadc_inst)).unwrap();
 
     LOGGER.init(log::LevelFilter::Info);
