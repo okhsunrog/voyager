@@ -123,6 +123,7 @@ The project is a Cargo workspace with the firmware excluded (different target):
 | Crate | Description |
 |---|---|
 | `firmware/` | nRF52840 firmware (no_std, `thumbv7em-none-eabihf`) |
+| `voyager-host/` | Linux BLE host daemon — scans advertisements, syncs time, exports Prometheus metrics |
 | `voyager-display/` | Shared display rendering library (no_std) — distance calculations, text formatting, scrolling bitmap |
 | `font-viewer/` | Desktop simulator using `embedded-graphics-simulator` — previews the full SSD1306 display |
 | `greeting-renderer/` | Renders multilingual greetings text to a 1-bit BMP for firmware use |
@@ -133,7 +134,8 @@ The project is a Cargo workspace with the firmware excluded (different target):
 - **Display**: SSD1306 128x64 OLED via I2C (P0.17 SDA, P0.20 SCL, 400 kHz)
 - **LED**: P0.15 (active low), blinks 200ms on / 1800ms off
 - **VCC enable**: P0.13 (nice!nano specific, set HIGH for 3.3V)
-- **BLE**: nRF SoftDevice Controller with Trouble host stack, advertises as "Voyager" with GATT time service
+- **Battery**: VDDH/5 internal SAADC channel (no external voltage divider needed)
+- **BLE**: nRF SoftDevice Controller with Trouble host stack, advertises as "Voyager" with time + battery mV in manufacturer data and GATT time service for writes
 - **USB**: CDC ACM for log output + 1200-baud bootloader reset detection
 
 ## Key details
@@ -141,5 +143,36 @@ The project is a Cargo workspace with the firmware excluded (different target):
 - **VTOR**: `cortex-m-rt` `set-vtor` feature is required because the Adafruit bootloader does not set VTOR before jumping to the app
 - **Display layout**: top 32px show Voyager 1 distance + signal delay, bottom 32px show scrolling greetings bitmap
 - **Time sync**: current time is seeded from compile-time timestamp (`BUILD_TIMESTAMP`), updated via BLE GATT write or internal tick
+- **BLE advertising**: broadcasts current unix time (u32 LE) and battery voltage (u16 LE mV) in manufacturer-specific data (company ID 0xFFFF) every 1s, refreshed every 30s. The host reads this passively and only connects when clock drift exceeds 3 minutes
 - **Distance tracking**: fixed-point arithmetic (no FPU), based on NASA JPL Horizons ephemeris data (Jan 1, 2025 reference: 165.6962 AU at 16.88225 km/s)
 - **1200-baud reset**: opening the CDC port at 1200 baud triggers a reset into bootloader (GPREGRET=0x57)
+
+## voyager-host
+
+Linux daemon that monitors the Voyager device over BLE and keeps its clock in sync. Designed for Raspberry Pi or any Linux host with BlueZ.
+
+### What it does
+
+1. Scans for BLE advertisements from "Voyager"
+2. Reads the manufacturer data to get device time and battery voltage
+3. If clock drift exceeds 3 minutes, connects via GATT and writes the correct time
+4. Exposes Prometheus metrics on port 9777
+
+### Running
+
+```sh
+cargo run -p voyager-host
+```
+
+### Prometheus metrics
+
+Scrape `http://<host>:9777/metrics`:
+
+| Metric | Type | Description |
+|---|---|---|
+| `voyager_battery_mv` | gauge | Battery voltage in millivolts (VDDH) |
+| `voyager_drift_seconds` | gauge | Clock drift in seconds (host - device) |
+| `voyager_device_time` | gauge | Device reported unix timestamp |
+| `voyager_last_seen_timestamp` | gauge | When the device was last seen |
+| `voyager_syncs_total` | counter | Number of time sync operations |
+| `voyager_rssi_dbm` | gauge | RSSI of last advertisement |
