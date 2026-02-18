@@ -188,6 +188,7 @@ async fn main(spawner: Spawner) {
     // Start HF clock (required for USB)
     pac::CLOCK.tasks_hfclkstart().write_value(1);
     while pac::CLOCK.events_hfclkstarted().read() != 1 {}
+    info!("[init] HF clock started");
 
     // --- BLE setup ---
     let mpsl_p = mpsl::Peripherals::new(p.RTC0, p.TIMER0, p.TEMP, p.PPI_CH19, p.PPI_CH30, p.PPI_CH31);
@@ -211,6 +212,8 @@ async fn main(spawner: Spawner) {
     let mut sdc_mem = sdc::Mem::<4720>::new();
     let sdc = build_sdc(sdc_p, &mut rng_driver, mpsl, &mut sdc_mem).unwrap();
 
+    info!("[init] BLE stack ready");
+
     // --- I2C + Display setup ---
     Timer::after_millis(100).await;
 
@@ -221,6 +224,7 @@ async fn main(spawner: Spawner) {
 
     let display = Ssd1306Async::new(I2CDisplayInterface::new(i2c), DisplaySize128x64, DisplayRotation::Rotate0)
         .into_buffered_graphics_mode();
+    info!("[init] I2C + display configured, entering run()");
 
     run(sdc, p.USBD, display).await;
 }
@@ -234,7 +238,16 @@ async fn run(
         ssd1306::mode::BufferedGraphicsModeAsync<DisplaySize128x64>,
     >,
 ) {
-    display.init().await.unwrap();
+    let display_ok = match display.init().await {
+        Ok(()) => {
+            info!("[display] initialized");
+            true
+        }
+        Err(_) => {
+            info!("[display] init failed, continuing without display");
+            false
+        }
+    };
 
     let address: Address = Address::random([0xff, 0x8f, 0x1a, 0x05, 0xe4, 0xff]);
     info!("BLE address = {:?}", address);
@@ -416,6 +429,11 @@ async fn run(
 
     // Display rendering
     let display_fut = async {
+        if !display_ok {
+            core::future::pending::<()>().await;
+            return;
+        }
+
         let bmp = Bmp::<BinaryColor>::from_slice(GREETINGS_BMP).unwrap();
         let bmp_width = bmp.bounding_box().size.width as i32;
         let mut scroll_offset = 0i32;
