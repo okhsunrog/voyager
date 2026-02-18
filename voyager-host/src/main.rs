@@ -9,6 +9,44 @@ use tokio::time::{Duration, sleep, timeout};
 use uuid::Uuid;
 
 const DEVICE_NAME: &str = "Voyager";
+
+/// Estimate battery percentage for Molicel INR18650-P30B (NMC, 2850 mAh).
+/// Lookup table derived from 0.2C discharge curve (OCV).
+/// Input: millivolts. Output: 0–100.
+fn battery_percent(mv: u32) -> u8 {
+    const LUT: &[(u32, u8)] = &[
+        (4200, 100),
+        (4100,  91),
+        (4000,  80),
+        (3900,  68),
+        (3800,  56),
+        (3700,  43),
+        (3650,  34),
+        (3600,  24),
+        (3500,  13),
+        (3400,   6),
+        (3200,   2),
+        (2800,   0),
+    ];
+
+    if mv >= LUT[0].0 {
+        return 100;
+    }
+    if mv <= LUT[LUT.len() - 1].0 {
+        return 0;
+    }
+    for i in 0..LUT.len() - 1 {
+        let (v_hi, p_hi) = LUT[i];
+        let (v_lo, p_lo) = LUT[i + 1];
+        if mv >= v_lo {
+            let p = p_lo as u32
+                + (p_hi as u32 - p_lo as u32) * (mv - v_lo)
+                / (v_hi - v_lo);
+            return p as u8;
+        }
+    }
+    0
+}
 const COMPANY_ID: u16 = 0xFFFF;
 const DRIFT_THRESHOLD_SECS: u32 = 180; // 3 minutes
 const METRICS_PORT: u16 = 9777;
@@ -18,6 +56,7 @@ const TIME_CHAR_UUID: Uuid = Uuid::from_u128(0xa2d7a6e1_5e7b_4f1c_8a3d_b2c9f0e1d
 
 struct Metrics {
     battery_mv: AtomicU64,
+    battery_percent: AtomicU64,
     drift_secs: AtomicI64,
     device_time: AtomicU64,
     last_seen: AtomicU64,
@@ -29,6 +68,7 @@ impl Metrics {
     fn new() -> Self {
         Self {
             battery_mv: AtomicU64::new(0),
+            battery_percent: AtomicU64::new(0),
             drift_secs: AtomicI64::new(0),
             device_time: AtomicU64::new(0),
             last_seen: AtomicU64::new(0),
@@ -42,6 +82,9 @@ impl Metrics {
         let _ = writeln!(s, "# HELP voyager_battery_mv Battery voltage in millivolts from VDDH.");
         let _ = writeln!(s, "# TYPE voyager_battery_mv gauge");
         let _ = writeln!(s, "voyager_battery_mv {}", self.battery_mv.load(Ordering::Relaxed));
+        let _ = writeln!(s, "# HELP voyager_battery_percent Battery charge estimate for INR18650-P30B (0–100).");
+        let _ = writeln!(s, "# TYPE voyager_battery_percent gauge");
+        let _ = writeln!(s, "voyager_battery_percent {}", self.battery_percent.load(Ordering::Relaxed));
         let _ = writeln!(s, "# HELP voyager_drift_seconds Clock drift in seconds (host - device).");
         let _ = writeln!(s, "# TYPE voyager_drift_seconds gauge");
         let _ = writeln!(s, "voyager_drift_seconds {}", self.drift_secs.load(Ordering::Relaxed));
@@ -178,6 +221,7 @@ async fn main() -> bluer::Result<()> {
 
                         // Update metrics
                         metrics.battery_mv.store(bat_mv as u64, Ordering::Relaxed);
+                        metrics.battery_percent.store(battery_percent(bat_mv as u32) as u64, Ordering::Relaxed);
                         metrics.drift_secs.store(drift, Ordering::Relaxed);
                         metrics.device_time.store(dev_time as u64, Ordering::Relaxed);
                         metrics.last_seen.store(host_time as u64, Ordering::Relaxed);
