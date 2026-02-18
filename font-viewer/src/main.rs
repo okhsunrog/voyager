@@ -89,7 +89,7 @@ fn run_viewer(bmp: &Bmp<BinaryColor>, bmp_width: i32, scale: u32) {
             clear_display(&mut display).unwrap();
 
             // Calculate real Voyager 1 distance
-            let distance = Distance::from_unix_timestamp(unix_secs);
+            let distance = Distance::from_unix_timestamp(unix_secs as u32);
             let delay = distance.signal_delay();
 
             // Render info section (top half)

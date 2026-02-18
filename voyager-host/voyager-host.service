@@ -1,0 +1,12 @@
+[Unit]
+Description=Voyager BLE host — scans advertisements, syncs time, exports Prometheus metrics
+After=bluetooth.target
+Wants=bluetooth.target
+
+[Service]
+ExecStart=/usr/local/bin/voyager-host
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

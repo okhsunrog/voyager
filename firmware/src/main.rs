@@ -72,13 +72,35 @@ async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
     mpsl.run().await
 }
 
-/// LED blink task - 200ms on, 1800ms off
+/// LED blink task - onboard LED: 200ms on / 1800ms off; external LEDs: aircraft beacon double-flash
 #[embassy_executor::task]
-async fn led_task(mut led: Output<'static>) {
+async fn led_task(mut led: Output<'static>, mut led1: Output<'static>, mut led2: Output<'static>, mut led3: Output<'static>) {
     loop {
+        // Onboard LED on
         led.set_high();
-        Timer::after_millis(200).await;
+
+        // Beacon double-flash
+        led1.set_high();
+        led2.set_high();
+        led3.set_high();
+        Timer::after_millis(50).await;
+        led1.set_low();
+        led2.set_low();
+        led3.set_low();
+        Timer::after_millis(50).await;
+        led1.set_high();
+        led2.set_high();
+        led3.set_high();
+        Timer::after_millis(50).await;
+        led1.set_low();
+        led2.set_low();
+        led3.set_low();
+
+        // Onboard LED: remaining 50ms to total 200ms on
+        Timer::after_millis(50).await;
         led.set_low();
+
+        // Long pause
         Timer::after_millis(1800).await;
     }
 }
@@ -155,7 +177,10 @@ async fn main(spawner: Spawner) {
 
     // LED blink task
     let led = Output::new(p.P0_15, Level::Low, OutputDrive::Standard);
-    spawner.spawn(led_task(led)).unwrap();
+    let led1 = Output::new(p.P0_06, Level::Low, OutputDrive::Standard);
+    let led2 = Output::new(p.P0_08, Level::Low, OutputDrive::Standard);
+    let led3 = Output::new(p.P1_11, Level::Low, OutputDrive::Standard);
+    spawner.spawn(led_task(led, led1, led2, led3)).unwrap();
 
     // Time tick task
     spawner.spawn(time_tick_task()).unwrap();
