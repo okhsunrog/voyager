@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "font-viewer",
     "voyager-display",
-    "greeting-renderer",
+    "greeting-renderer", "voyager-host",
 ]
 exclude = [
     "firmware",  # Different toolchain (thumbv7em-none-eabihf)
