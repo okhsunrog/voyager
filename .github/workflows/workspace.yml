@@ -1,0 +1,32 @@
+name: 'workspace'
+
+on: [push, pull_request]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libsdl2-dev
+
+      - name: run format check
+        run: cargo fmt --check --all
+
+      - name: run clippy
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: run tests
+        run: cargo test --workspace
+
+      - name: build
+        run: cargo build --workspace --release

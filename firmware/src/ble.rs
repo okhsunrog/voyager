@@ -1,3 +1,6 @@
+// False positive from the #[gatt_service] macro-generated code.
+#![allow(clippy::needless_borrows_for_generic_args)]
+
 //! BLE (Bluetooth Low Energy) module.
 //!
 //! Contains the GATT server definition, SoftDevice Controller builder,

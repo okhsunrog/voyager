@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use voyager_display::{
-    Bmp, Distance, DISPLAY_HEIGHT, DISPLAY_WIDTH,
-    advance_scroll, clear_display, render_info, render_scrolling_bmp,
+    Bmp, DISPLAY_HEIGHT, DISPLAY_WIDTH, Distance, advance_scroll, clear_display, render_info,
+    render_scrolling_bmp,
 };
 
 #[derive(Parser, Debug)]
@@ -47,7 +47,11 @@ fn main() {
     });
 
     let bmp_width = bmp.bounding_box().size.width as i32;
-    println!("BMP size: {}x{} pixels", bmp_width, bmp.bounding_box().size.height);
+    println!(
+        "BMP size: {}x{} pixels",
+        bmp_width,
+        bmp.bounding_box().size.height
+    );
 
     run_viewer(&bmp, bmp_width, args.scale);
 }

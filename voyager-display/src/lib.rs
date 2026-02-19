@@ -7,13 +7,13 @@
 
 use core::fmt::{self, Write};
 use embedded_graphics::{
+    Pixel,
     draw_target::DrawTarget,
     geometry::Point,
-    mono_font::{ascii::FONT_9X15, MonoTextStyle},
+    mono_font::{MonoTextStyle, ascii::FONT_9X15},
     pixelcolor::BinaryColor,
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
-    Pixel,
 };
 pub use tinybmp::Bmp;
 
@@ -277,13 +277,13 @@ where
             let screen_y = MESSAGE_Y + bmp_y;
 
             // Get pixel color from BMP
-            if let Some(color) = get_bmp_pixel(bmp, bmp_x as u32, bmp_y as u32) {
-                if color == BinaryColor::On {
-                    let _ = display.draw_iter(core::iter::once(Pixel(
-                        Point::new(screen_x, screen_y),
-                        BinaryColor::On,
-                    )));
-                }
+            if let Some(color) = get_bmp_pixel(bmp, bmp_x as u32, bmp_y as u32)
+                && color == BinaryColor::On
+            {
+                let _ = display.draw_iter(core::iter::once(Pixel(
+                    Point::new(screen_x, screen_y),
+                    BinaryColor::On,
+                )));
             }
         }
     }
@@ -300,7 +300,7 @@ fn get_bmp_pixel(bmp: &Bmp<'_, BinaryColor>, x: u32, y: u32) -> Option<BinaryCol
 
     // Use the raw BMP data access
     let raw = bmp.as_raw();
-    let row_stride = ((size.width + 31) / 32) * 4; // BMP rows are 4-byte aligned
+    let row_stride = size.width.div_ceil(32) * 4; // BMP rows are 4-byte aligned
 
     // BMP stores rows bottom-to-top
     let flipped_y = size.height - 1 - y;

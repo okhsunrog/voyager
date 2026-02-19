@@ -2,8 +2,8 @@ use axum::{Router, routing::get};
 use bluer::{AdapterEvent, Device};
 use futures::StreamExt as _;
 use std::fmt::Write as _;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{Duration, sleep, timeout};
 use uuid::Uuid;
@@ -16,17 +16,17 @@ const DEVICE_NAME: &str = "Voyager";
 fn battery_percent(mv: u32) -> u8 {
     const LUT: &[(u32, u8)] = &[
         (4200, 100),
-        (4100,  91),
-        (4000,  80),
-        (3900,  68),
-        (3800,  56),
-        (3700,  43),
-        (3650,  34),
-        (3600,  24),
-        (3500,  13),
-        (3400,   6),
-        (3200,   2),
-        (2800,   0),
+        (4100, 91),
+        (4000, 80),
+        (3900, 68),
+        (3800, 56),
+        (3700, 43),
+        (3650, 34),
+        (3600, 24),
+        (3500, 13),
+        (3400, 6),
+        (3200, 2),
+        (2800, 0),
     ];
 
     if mv >= LUT[0].0 {
@@ -39,9 +39,7 @@ fn battery_percent(mv: u32) -> u8 {
         let (v_hi, p_hi) = LUT[i];
         let (v_lo, p_lo) = LUT[i + 1];
         if mv >= v_lo {
-            let p = p_lo as u32
-                + (p_hi as u32 - p_lo as u32) * (mv - v_lo)
-                / (v_hi - v_lo);
+            let p = p_lo as u32 + (p_hi as u32 - p_lo as u32) * (mv - v_lo) / (v_hi - v_lo);
             return p as u8;
         }
     }
@@ -79,25 +77,70 @@ impl Metrics {
 
     fn render(&self) -> String {
         let mut s = String::with_capacity(512);
-        let _ = writeln!(s, "# HELP voyager_battery_mv Battery voltage in millivolts from VDDH.");
+        let _ = writeln!(
+            s,
+            "# HELP voyager_battery_mv Battery voltage in millivolts from VDDH."
+        );
         let _ = writeln!(s, "# TYPE voyager_battery_mv gauge");
-        let _ = writeln!(s, "voyager_battery_mv {}", self.battery_mv.load(Ordering::Relaxed));
-        let _ = writeln!(s, "# HELP voyager_battery_percent Battery charge estimate for INR18650-P30B (0–100).");
+        let _ = writeln!(
+            s,
+            "voyager_battery_mv {}",
+            self.battery_mv.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            s,
+            "# HELP voyager_battery_percent Battery charge estimate for INR18650-P30B (0–100)."
+        );
         let _ = writeln!(s, "# TYPE voyager_battery_percent gauge");
-        let _ = writeln!(s, "voyager_battery_percent {}", self.battery_percent.load(Ordering::Relaxed));
-        let _ = writeln!(s, "# HELP voyager_drift_seconds Clock drift in seconds (host - device).");
+        let _ = writeln!(
+            s,
+            "voyager_battery_percent {}",
+            self.battery_percent.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            s,
+            "# HELP voyager_drift_seconds Clock drift in seconds (host - device)."
+        );
         let _ = writeln!(s, "# TYPE voyager_drift_seconds gauge");
-        let _ = writeln!(s, "voyager_drift_seconds {}", self.drift_secs.load(Ordering::Relaxed));
-        let _ = writeln!(s, "# HELP voyager_device_time Device reported unix timestamp.");
+        let _ = writeln!(
+            s,
+            "voyager_drift_seconds {}",
+            self.drift_secs.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            s,
+            "# HELP voyager_device_time Device reported unix timestamp."
+        );
         let _ = writeln!(s, "# TYPE voyager_device_time gauge");
-        let _ = writeln!(s, "voyager_device_time {}", self.device_time.load(Ordering::Relaxed));
-        let _ = writeln!(s, "# HELP voyager_last_seen_timestamp Unix timestamp of last advertisement seen.");
+        let _ = writeln!(
+            s,
+            "voyager_device_time {}",
+            self.device_time.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            s,
+            "# HELP voyager_last_seen_timestamp Unix timestamp of last advertisement seen."
+        );
         let _ = writeln!(s, "# TYPE voyager_last_seen_timestamp gauge");
-        let _ = writeln!(s, "voyager_last_seen_timestamp {}", self.last_seen.load(Ordering::Relaxed));
-        let _ = writeln!(s, "# HELP voyager_syncs_total Number of time sync operations performed.");
+        let _ = writeln!(
+            s,
+            "voyager_last_seen_timestamp {}",
+            self.last_seen.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            s,
+            "# HELP voyager_syncs_total Number of time sync operations performed."
+        );
         let _ = writeln!(s, "# TYPE voyager_syncs_total counter");
-        let _ = writeln!(s, "voyager_syncs_total {}", self.syncs_total.load(Ordering::Relaxed));
-        let _ = writeln!(s, "# HELP voyager_rssi_dbm RSSI of last received advertisement.");
+        let _ = writeln!(
+            s,
+            "voyager_syncs_total {}",
+            self.syncs_total.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            s,
+            "# HELP voyager_rssi_dbm RSSI of last received advertisement."
+        );
         let _ = writeln!(s, "# TYPE voyager_rssi_dbm gauge");
         let _ = writeln!(s, "voyager_rssi_dbm {}", self.rssi.load(Ordering::Relaxed));
         s
@@ -203,7 +246,11 @@ async fn main() -> bluer::Result<()> {
     let session = bluer::Session::new().await?;
     let adapter = session.default_adapter().await?;
     adapter.set_powered(true).await?;
-    println!("Using adapter {} ({})", adapter.name(), adapter.address().await?);
+    println!(
+        "Using adapter {} ({})",
+        adapter.name(),
+        adapter.address().await?
+    );
 
     loop {
         println!("Scanning for {DEVICE_NAME}...");
@@ -222,9 +269,13 @@ async fn main() -> bluer::Result<()> {
 
                         // Update metrics
                         metrics.battery_mv.store(bat_mv as u64, Ordering::Relaxed);
-                        metrics.battery_percent.store(battery_percent(bat_mv as u32) as u64, Ordering::Relaxed);
+                        metrics
+                            .battery_percent
+                            .store(battery_percent(bat_mv as u32) as u64, Ordering::Relaxed);
                         metrics.drift_secs.store(drift, Ordering::Relaxed);
-                        metrics.device_time.store(dev_time as u64, Ordering::Relaxed);
+                        metrics
+                            .device_time
+                            .store(dev_time as u64, Ordering::Relaxed);
                         metrics.last_seen.store(host_time as u64, Ordering::Relaxed);
                         if let Ok(Some(rssi)) = device.rssi().await {
                             metrics.rssi.store(rssi as i64, Ordering::Relaxed);
@@ -241,7 +292,9 @@ async fn main() -> bluer::Result<()> {
         })
         .await;
 
-        // Drop the discovery stream before connecting — avoids scan timeout racing with sync
+        // Drop the discovery stream before connecting — avoids scan timeout racing with sync.
+        #[allow(clippy::drop_non_drop)]
+        // intentional: dropping the pinned stream stops BLE scanning
         drop(discover);
 
         match scan_result {
@@ -251,9 +304,9 @@ async fn main() -> bluer::Result<()> {
                     if let Err(e) = sync_time(&device).await {
                         eprintln!("  Sync failed: {e}");
                     } else {
-                                        metrics.syncs_total.fetch_add(1, Ordering::Relaxed);
-                                        metrics.drift_secs.store(0, Ordering::Relaxed);
-                                    }
+                        metrics.syncs_total.fetch_add(1, Ordering::Relaxed);
+                        metrics.drift_secs.store(0, Ordering::Relaxed);
+                    }
                 }
             }
             Ok(Ok(None)) => {}
