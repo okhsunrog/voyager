@@ -1,36 +1,57 @@
+//! Voyager firmware — nRF52840 (nice!nano v2).
+//!
+//! This is the top-level entry point.  It initialises hardware peripherals,
+//! spawns background tasks, and wires together the BLE, USB, and display
+//! subsystems.  Domain logic lives in dedicated modules:
+//!
+//! - [`resources`] — pin/peripheral assignments (single source of truth)
+//! - [`ble`]       — BLE advertising, GATT server, SoftDevice Controller
+//! - [`display`]   — OLED rendering loop
+//! - [`leds`]      — LED blink task
+//! - [`battery`]   — battery voltage measurement
+//! - [`usb_logger`] — CDC-ACM log transport
+
 #![no_std]
 #![no_main]
 
+mod battery;
+mod ble;
+mod display;
+mod leds;
+mod resources;
 mod usb_logger;
 
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_futures::select::{select, Either};
 use embassy_nrf::gpio::{Level, Output, OutputDrive};
 use embassy_nrf::peripherals::RNG;
 use embassy_nrf::saadc::{self, Saadc, VddhDiv5Input};
 use embassy_nrf::twim::{self, Twim};
-use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
 use embassy_nrf::usb::Driver;
-use embassy_nrf::{bind_interrupts, pac, peripherals, Peri, rng, usb};
+use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
+use embassy_nrf::{Peri, bind_interrupts, pac, peripherals, rng, usb};
 use embassy_time::{Duration, Timer};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::{Builder, Config};
-use embedded_graphics::{pixelcolor::BinaryColor, prelude::*};
 use log::info;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
+use panic_halt as _;
 use portable_atomic::{AtomicU32, Ordering};
-use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306Async};
+use resources::*;
+use ssd1306::{I2CDisplayInterface, Ssd1306Async, prelude::*};
 use static_cell::StaticCell;
-use trouble_host::prelude::*;
-use voyager_display::{Bmp, Distance, advance_scroll, render_info, render_scrolling_bmp};
-use {panic_halt as _};
 
+// ---------------------------------------------------------------------------
+// Shared state — accessed from multiple modules via `crate::XXX`
+// ---------------------------------------------------------------------------
+
+/// USB CDC-ACM logger (1 KiB ring buffer).
 static LOGGER: usb_logger::UsbLogger<1024> = usb_logger::UsbLogger::new();
 
-/// Parse a decimal string to u32 at compile time
+/// Parse a decimal ASCII string to `u32` at compile time.
+/// Used to convert the `BUILD_TIMESTAMP` env var set by `build.rs`.
 const fn parse_u32(s: &str) -> u32 {
     let bytes = s.as_bytes();
     let mut result: u32 = 0;
@@ -43,17 +64,22 @@ const fn parse_u32(s: &str) -> u32 {
     result
 }
 
-/// Compile-time Unix timestamp from build.rs
-const BUILD_TIMESTAMP: u32 = parse_u32(env!("BUILD_TIMESTAMP"));
+/// Unix timestamp captured at compile time (from `build.rs`).
+/// Used as the initial value for [`CURRENT_TIME`].
+pub(crate) const BUILD_TIMESTAMP: u32 = parse_u32(env!("BUILD_TIMESTAMP"));
 
-/// Current time in Unix seconds — single source of truth
-static CURRENT_TIME: AtomicU32 = AtomicU32::new(BUILD_TIMESTAMP);
+/// Current Unix time in seconds.  Incremented every second by
+/// [`time_tick_task`] and can be overwritten via BLE (see [`ble`]).
+pub(crate) static CURRENT_TIME: AtomicU32 = AtomicU32::new(BUILD_TIMESTAMP);
 
-/// Battery voltage in millivolts (from VDDHDIV5 internal channel)
-static BATTERY_MV: AtomicU32 = AtomicU32::new(0);
+/// Last measured battery voltage in millivolts.
+/// Updated every 60 s by [`battery::battery_task`].
+pub(crate) static BATTERY_MV: AtomicU32 = AtomicU32::new(0);
 
-/// Greetings bitmap (pre-rendered with greeting-renderer)
-static GREETINGS_BMP: &[u8] = include_bytes!("../assets/greetings.bmp");
+// ---------------------------------------------------------------------------
+// Interrupt bindings — maps hardware IRQs to embassy/nrf-sdc handlers.
+// Kept in main.rs because `Irqs` is referenced by driver constructors below.
+// ---------------------------------------------------------------------------
 
 bind_interrupts!(struct Irqs {
     USBD => usb::InterruptHandler<peripherals::USBD>;
@@ -67,45 +93,11 @@ bind_interrupts!(struct Irqs {
     SAADC => saadc::InterruptHandler;
 });
 
-#[embassy_executor::task]
-async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
-    mpsl.run().await
-}
+// ---------------------------------------------------------------------------
+// Small tasks that live in main (too tiny for their own module)
+// ---------------------------------------------------------------------------
 
-/// LED blink task - onboard LED: 200ms on / 1800ms off; external LEDs: aircraft beacon double-flash
-#[embassy_executor::task]
-async fn led_task(mut led: Output<'static>, mut led1: Output<'static>, mut led2: Output<'static>, mut led3: Output<'static>) {
-    loop {
-        // Onboard LED on
-        led.set_high();
-
-        // Beacon double-flash
-        led1.set_high();
-        led2.set_high();
-        led3.set_high();
-        Timer::after_millis(50).await;
-        led1.set_low();
-        led2.set_low();
-        led3.set_low();
-        Timer::after_millis(50).await;
-        led1.set_high();
-        led2.set_high();
-        led3.set_high();
-        Timer::after_millis(50).await;
-        led1.set_low();
-        led2.set_low();
-        led3.set_low();
-
-        // Onboard LED: remaining 50ms to total 200ms on
-        Timer::after_millis(50).await;
-        led.set_low();
-
-        // Long pause
-        Timer::after_millis(1800).await;
-    }
-}
-
-/// Time tick task - increments CURRENT_TIME every second
+/// Increments [`CURRENT_TIME`] by one every second.
 #[embassy_executor::task]
 async fn time_tick_task() {
     loop {
@@ -114,93 +106,55 @@ async fn time_tick_task() {
     }
 }
 
-/// Battery measurement task - reads VDDH/5 internal channel every 60s
-#[embassy_executor::task]
-async fn battery_task(mut saadc: Saadc<'static, 1>) {
-    loop {
-        let mut buf = [0i16; 1];
-        saadc.sample(&mut buf).await;
-        let raw = buf[0].max(0) as u32;
-        // Gain 1/6, internal 0.6V ref, 12-bit → full scale 3.6V at 4096
-        // VDDHDIV5 reads VDDH/5, so multiply by 5 to get actual VDDH (= battery voltage)
-        let battery_mv = raw * 3600 / 4096 * 5;
-        BATTERY_MV.store(battery_mv, Ordering::Relaxed);
-        info!("[battery] {}mV (raw={})", battery_mv, raw);
-        Timer::after(Duration::from_secs(60)).await;
-    }
-}
-
-/// How many outgoing L2CAP buffers per link
-const L2CAP_TXQ: u8 = 3;
-/// How many incoming L2CAP buffers per link
-const L2CAP_RXQ: u8 = 3;
-const CONNECTIONS_MAX: usize = 1;
-const L2CAP_CHANNELS_MAX: usize = 2; // Signal + att
-
-fn build_sdc<'d, const N: usize>(
-    p: nrf_sdc::Peripherals<'d>,
-    rng: &'d mut rng::Rng<'d, embassy_nrf::mode::Async>,
-    mpsl: &'d MultiprotocolServiceLayer,
-    mem: &'d mut sdc::Mem<N>,
-) -> Result<nrf_sdc::SoftdeviceController<'d>, nrf_sdc::Error> {
-    sdc::Builder::new()?
-        .support_adv()
-        .support_peripheral()
-        .peripheral_count(1)?
-        .buffer_cfg(
-            DefaultPacketPool::MTU as u16,
-            DefaultPacketPool::MTU as u16,
-            L2CAP_TXQ,
-            L2CAP_RXQ,
-        )?
-        .build(p, rng, mpsl, mem)
-}
-
-#[gatt_server]
-struct Server {
-    time_service: TimeService,
-}
-
-#[gatt_service(uuid = "a2d7a6e0-5e7b-4f1c-8a3d-b2c9f0e1d4a8")]
-struct TimeService {
-    #[characteristic(uuid = "a2d7a6e1-5e7b-4f1c-8a3d-b2c9f0e1d4a8", read, write)]
-    unix_time: u32,
-}
-
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    // Initialise all nRF52840 peripherals with default config.
     let p = embassy_nrf::init(Default::default());
 
-    // P0.13 controls VCC on nice!nano - set HIGH to enable 3.3V power
-    let _vcc_enable = Output::new(p.P0_13, Level::High, OutputDrive::Standard);
+    // Split peripherals into named groups (see resources.rs for the mapping).
+    let r = split_resources!(p);
 
-    // LED blink task
-    let led = Output::new(p.P0_15, Level::Low, OutputDrive::Standard);
-    let led1 = Output::new(p.P0_06, Level::Low, OutputDrive::Standard);
-    let led2 = Output::new(p.P0_08, Level::Low, OutputDrive::Standard);
-    let led3 = Output::new(p.P1_11, Level::Low, OutputDrive::Standard);
-    spawner.spawn(led_task(led, led1, led2, led3)).unwrap();
+    // P0.13 controls the 3.3 V regulator on the nice!nano v2 board.
+    // Driving it HIGH keeps VCC enabled; dropping it would cut power.
+    let _vcc_enable = Output::new(r.power.vcc_enable, Level::High, OutputDrive::Standard);
 
-    // Time tick task
+    // --- Spawn background tasks ---
+
+    spawner.spawn(leds::led_task(r.leds)).unwrap();
     spawner.spawn(time_tick_task()).unwrap();
 
-    // Battery measurement via VDDH/5 internal channel (no external components needed)
+    // Set up the SAADC for battery measurement (VDDH/5 internal channel,
+    // 16× hardware oversampling for a cleaner reading).
     let ch_vddh = saadc::ChannelConfig::single_ended(VddhDiv5Input);
     let mut saadc_config = saadc::Config::default();
     saadc_config.oversample = saadc::Oversample::OVER16X;
-    let saadc_inst = Saadc::new(p.SAADC, Irqs, saadc_config, [ch_vddh]);
-    spawner.spawn(battery_task(saadc_inst)).unwrap();
+    let saadc_inst = Saadc::new(r.battery.saadc, Irqs, saadc_config, [ch_vddh]);
+    spawner.spawn(battery::battery_task(saadc_inst)).unwrap();
 
+    // Initialise the USB CDC-ACM logger so `log::info!` etc. are available.
     LOGGER.init(log::LevelFilter::Info);
 
-    // Start HF clock (required for USB)
+    // The USB peripheral needs the high-frequency clock running.
     pac::CLOCK.tasks_hfclkstart().write_value(1);
     while pac::CLOCK.events_hfclkstarted().read() != 1 {}
     info!("[init] HF clock started");
 
-    // --- BLE setup ---
-    let mpsl_p = mpsl::Peripherals::new(p.RTC0, p.TIMER0, p.TEMP, p.PPI_CH19, p.PPI_CH30, p.PPI_CH31);
+    // --- BLE: MPSL + SoftDevice Controller ---
+
+    // MPSL manages radio timeslots and clocking for the BLE stack.
+    let mpsl_p = mpsl::Peripherals::new(
+        r.mpsl.rtc0,
+        r.mpsl.timer0,
+        r.mpsl.temp,
+        r.mpsl.ppi_ch19,
+        r.mpsl.ppi_ch30,
+        r.mpsl.ppi_ch31,
+    );
+    // Use the internal RC oscillator as the low-frequency clock source.
     let lfclk_cfg = mpsl::raw::mpsl_clock_lfclk_cfg_t {
         source: mpsl::raw::MPSL_CLOCK_LF_SRC_RC as u8,
         rc_ctiv: mpsl::raw::MPSL_RECOMMENDED_RC_CTIV as u8,
@@ -210,74 +164,76 @@ async fn main(spawner: Spawner) {
     };
     static MPSL: StaticCell<MultiprotocolServiceLayer> = StaticCell::new();
     let mpsl = MPSL.init(mpsl::MultiprotocolServiceLayer::new(mpsl_p, Irqs, lfclk_cfg).unwrap());
-    spawner.spawn(mpsl_task(&*mpsl)).unwrap();
+    spawner.spawn(ble::mpsl_task(&*mpsl)).unwrap();
 
+    // Build the SoftDevice Controller (BLE link-layer).
     let sdc_p = sdc::Peripherals::new(
-        p.PPI_CH17, p.PPI_CH18, p.PPI_CH20, p.PPI_CH21, p.PPI_CH22, p.PPI_CH23, p.PPI_CH24,
-        p.PPI_CH25, p.PPI_CH26, p.PPI_CH27, p.PPI_CH28, p.PPI_CH29,
+        r.sdc.ppi_ch17,
+        r.sdc.ppi_ch18,
+        r.sdc.ppi_ch20,
+        r.sdc.ppi_ch21,
+        r.sdc.ppi_ch22,
+        r.sdc.ppi_ch23,
+        r.sdc.ppi_ch24,
+        r.sdc.ppi_ch25,
+        r.sdc.ppi_ch26,
+        r.sdc.ppi_ch27,
+        r.sdc.ppi_ch28,
+        r.sdc.ppi_ch29,
     );
-
-    let mut rng_driver = core::mem::ManuallyDrop::new(rng::Rng::new(p.RNG, Irqs));
+    // ManuallyDrop: the RNG driver is borrowed by the SDC for its lifetime,
+    // so we must not drop it while the SDC is alive.
+    let mut rng_driver = core::mem::ManuallyDrop::new(rng::Rng::new(r.ble.rng, Irqs));
     let mut sdc_mem = sdc::Mem::<4720>::new();
-    let sdc = build_sdc(sdc_p, &mut rng_driver, mpsl, &mut sdc_mem).unwrap();
-
+    let sdc = ble::build_sdc(sdc_p, &mut rng_driver, mpsl, &mut sdc_mem).unwrap();
     info!("[init] BLE stack ready");
 
-    // --- I2C + Display setup ---
+    // --- I2C display ---
+
+    // Short delay to let the SSD1306 finish its power-on reset.
     Timer::after_millis(100).await;
 
     static TWIM_BUF: StaticCell<[u8; 2048]> = StaticCell::new();
-    let mut twim_config = embassy_nrf::twim::Config::default();
-    twim_config.frequency = embassy_nrf::twim::Frequency::K400;
-    let i2c = Twim::new(p.TWISPI0, Irqs, p.P0_17, p.P0_20, twim_config, TWIM_BUF.init([0; 2048]));
+    let mut twim_config = twim::Config::default();
+    twim_config.frequency = twim::Frequency::K400;
+    let i2c = Twim::new(
+        r.display.twim,
+        Irqs,
+        r.display.sda,
+        r.display.scl,
+        twim_config,
+        TWIM_BUF.init([0; 2048]),
+    );
+    let display = Ssd1306Async::new(
+        I2CDisplayInterface::new(i2c),
+        DisplaySize128x64,
+        DisplayRotation::Rotate0,
+    )
+    .into_buffered_graphics_mode();
+    info!("[init] I2C + display configured");
 
-    let display = Ssd1306Async::new(I2CDisplayInterface::new(i2c), DisplaySize128x64, DisplayRotation::Rotate0)
-        .into_buffered_graphics_mode();
-    info!("[init] I2C + display configured, entering run()");
-
-    run(sdc, p.USBD, display).await;
+    // Hand off to the main run loop.
+    run(sdc, r.usb.usbd, display).await;
 }
 
+// ---------------------------------------------------------------------------
+// Main run loop — runs BLE, USB, and display concurrently
+// ---------------------------------------------------------------------------
+
+/// Top-level async loop that drives three subsystems in parallel:
+///
+/// 1. **BLE** — advertising + GATT connection handling
+/// 2. **USB** — CDC-ACM device, log output, and bootloader trigger
+/// 3. **Display** — OLED rendering
+///
+/// None of these futures ever return, so this function runs forever.
 async fn run(
     sdc: nrf_sdc::SoftdeviceController<'_>,
     usbd: Peri<'_, peripherals::USBD>,
-    mut display: Ssd1306Async<
-        ssd1306::prelude::I2CInterface<Twim<'_>>,
-        DisplaySize128x64,
-        ssd1306::mode::BufferedGraphicsModeAsync<DisplaySize128x64>,
-    >,
+    display: display::Display<'_>,
 ) {
-    let display_ok = match display.init().await {
-        Ok(()) => {
-            info!("[display] initialized");
-            true
-        }
-        Err(_) => {
-            info!("[display] init failed, continuing without display");
-            false
-        }
-    };
+    // --- USB CDC-ACM setup ---
 
-    let address: Address = Address::random([0xff, 0x8f, 0x1a, 0x05, 0xe4, 0xff]);
-    info!("BLE address = {:?}", address);
-
-    let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> = HostResources::new();
-    let stack = trouble_host::new(sdc, &mut resources).set_random_address(address);
-    let Host {
-        mut peripheral,
-        mut runner,
-        ..
-    } = stack.build();
-
-    let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-        name: "Voyager",
-        appearance: &appearance::UNKNOWN,
-    }))
-    .unwrap();
-
-    info!("Voyager initialized (build timestamp: {})", BUILD_TIMESTAMP);
-
-    // --- USB setup ---
     let driver = Driver::new(usbd, Irqs, HardwareVbusDetect::new(Irqs));
 
     let mut config = Config::new(0xc0de, 0xcafe);
@@ -306,10 +262,13 @@ async fn run(
     let (mut sender, receiver, control) = class.split_with_control();
     let mut usb = builder.build();
 
-    // --- Task futures ---
+    // --- Futures ---
 
+    // Drives the USB device stack (handles enumeration, transfers, etc.).
     let usb_fut = usb.run();
 
+    // Reads log messages from the ring buffer and sends them over CDC-ACM.
+    // Waits for a USB host to connect before starting.
     let log_fut = async {
         let mut buf = [0u8; 64];
         sender.wait_connection().await;
@@ -318,14 +277,19 @@ async fn run(
             if let Err(EndpointError::Disabled) = sender.write_packet(&buf[..n]).await {
                 sender.wait_connection().await;
             }
-            if n == 64 {
-                if let Err(EndpointError::Disabled) = sender.write_packet(&[]).await {
-                    sender.wait_connection().await;
-                }
+            // USB CDC requires a zero-length packet after a full-size packet
+            // to signal end-of-transfer.
+            if n == 64
+                && let Err(EndpointError::Disabled) = sender.write_packet(&[]).await
+            {
+                sender.wait_connection().await;
             }
         }
     };
 
+    // Monitors the CDC-ACM control line.  When the host sets the baud rate
+    // to 1200 bps it triggers a system reset into the UF2 bootloader
+    // (standard "double-tap" convention used by Arduino/nice!nano boards).
     let control_fut = async {
         loop {
             control.control_changed().await;
@@ -337,166 +301,13 @@ async fn run(
         }
     };
 
-    // BLE runner
-    let ble_runner_fut = async {
-        loop {
-            if let Err(e) = runner.run().await {
-                info!("[ble] runner error: {:?}", e);
-            }
-        }
-    };
+    // --- Run everything concurrently ---
 
-    // BLE advertising + connection handling
-    // Advertises current time (u32 LE) and battery % (u8) in manufacturer data
-    // so the host can read them without connecting. Host only connects to set time.
-    let ble_peripheral_fut = async {
-        let unix_time = server.time_service.unix_time;
-
-        let adv_params = AdvertisementParameters {
-            interval_min: Duration::from_millis(1000),
-            interval_max: Duration::from_millis(1000),
-            ..Default::default()
-        };
-
-        loop {
-            // Encode current time + battery mV into manufacturer-specific data
-            let ts = CURRENT_TIME.load(Ordering::Relaxed);
-            let bat_mv = BATTERY_MV.load(Ordering::Relaxed) as u16;
-            let mut payload = [0u8; 6];
-            payload[0..4].copy_from_slice(&ts.to_le_bytes());
-            payload[4..6].copy_from_slice(&bat_mv.to_le_bytes());
-
-            let mut adv_data = [0; 31];
-            let len = AdStructure::encode_slice(
-                &[
-                    AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
-                    AdStructure::CompleteLocalName(b"Voyager"),
-                    AdStructure::ManufacturerSpecificData {
-                        company_identifier: 0xFFFF,
-                        payload: &payload,
-                    },
-                ],
-                &mut adv_data[..],
-            )
-            .unwrap();
-
-            info!("[ble] advertising (time={}, bat={}mV)...", ts, bat_mv);
-            let advertiser = match peripheral
-                .advertise(
-                    &adv_params,
-                    Advertisement::ConnectableScannableUndirected {
-                        adv_data: &adv_data[..len],
-                        scan_data: &[],
-                    },
-                )
-                .await
-            {
-                Ok(a) => a,
-                Err(e) => {
-                    info!("[ble] advertise error: {:?}", e);
-                    Timer::after(Duration::from_secs(1)).await;
-                    continue;
-                }
-            };
-
-            // Race accept against a 30s timer to periodically refresh adv data
-            let conn = match select(advertiser.accept(), Timer::after(Duration::from_secs(30))).await {
-                Either::Second(()) => {
-                    // Timeout — restart advertising with fresh time+battery
-                    continue;
-                }
-                Either::First(Err(e)) => {
-                    info!("[ble] accept error: {:?}", e);
-                    continue;
-                }
-                Either::First(Ok(c)) => match c.with_attribute_server(&server) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        info!("[ble] attribute server error: {:?}", e);
-                        continue;
-                    }
-                },
-            };
-
-            info!("[ble] connected");
-
-            loop {
-                match conn.next().await {
-                    GattConnectionEvent::Disconnected { reason } => {
-                        info!("[ble] disconnected: {:?}", reason);
-                        break;
-                    }
-                    GattConnectionEvent::Gatt { event } => {
-                        match &event {
-                            GattEvent::Write(event) => {
-                                if event.handle() == unix_time.handle {
-                                    let data = event.data();
-                                    if data.len() == 4 {
-                                        let ts = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-                                        CURRENT_TIME.store(ts, Ordering::Relaxed);
-                                        info!("[ble] time set to {}", ts);
-                                    }
-                                }
-                            }
-                            GattEvent::Read(event) => {
-                                if event.handle() == unix_time.handle {
-                                    let ts = CURRENT_TIME.load(Ordering::Relaxed);
-                                    let _ = server.set(&unix_time, &ts);
-                                    info!("[ble] time read: {}", ts);
-                                }
-                            }
-                            _ => {}
-                        }
-                        match event.accept() {
-                            Ok(reply) => reply.send().await,
-                            Err(e) => info!("[gatt] error sending response: {:?}", e),
-                        };
-                    }
-                    _ => {}
-                }
-            }
-        }
-    };
-
-    // Display rendering
-    let display_fut = async {
-        if !display_ok {
-            core::future::pending::<()>().await;
-            return;
-        }
-
-        let bmp = Bmp::<BinaryColor>::from_slice(GREETINGS_BMP).unwrap();
-        let bmp_width = bmp.bounding_box().size.width as i32;
-        let mut scroll_offset = 0i32;
-        const SCROLL_SPEED: i32 = 3;
-
-        loop {
-            let current_time = CURRENT_TIME.load(Ordering::Relaxed);
-
-            display.clear_buffer();
-
-            let distance = Distance::from_unix_timestamp(current_time);
-            let delay = distance.signal_delay();
-            let _ = render_info(&mut display, &distance, &delay);
-
-            let _ = render_scrolling_bmp(&mut display, &bmp, scroll_offset);
-            scroll_offset = advance_scroll(scroll_offset, SCROLL_SPEED, bmp_width);
-
-            let _ = display.flush().await;
-
-            Timer::after_millis(50).await;
-        }
-    };
-
-    // Combine BLE futures
-    let ble_fut = join(ble_runner_fut, ble_peripheral_fut);
-
-    // Combine USB futures
+    let ble_fut = ble::run(sdc);
+    let display_fut = display::run(display);
     let usb_group = async {
         embassy_futures::join::join3(usb_fut, log_fut, control_fut).await;
     };
 
-    // Run everything
-    let connectivity_fut = join(ble_fut, usb_group);
-    join(connectivity_fut, display_fut).await;
+    join(join(ble_fut, usb_group), display_fut).await;
 }

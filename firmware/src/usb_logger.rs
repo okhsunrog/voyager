@@ -47,10 +47,10 @@ struct Writer<'d, const N: usize>(&'d Pipe<CS, N>);
 impl<const N: usize> core::fmt::Write for Writer<'_, N> {
     fn write_str(&mut self, s: &str) -> Result<(), core::fmt::Error> {
         let b = s.as_bytes();
-        if let Ok(n) = self.0.try_write(b) {
-            if n < b.len() {
-                let _ = self.0.try_write(&b[n..]);
-            }
+        if let Ok(n) = self.0.try_write(b)
+            && n < b.len()
+        {
+            let _ = self.0.try_write(&b[n..]);
         }
         Ok(())
     }
